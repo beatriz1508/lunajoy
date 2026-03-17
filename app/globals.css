@@ -1,0 +1,60 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0c0c0b;
+  --surface: #141413;
+  --surface2: #1b1b19;
+  --border: #252523;
+  --border2: #333330;
+  --text: #e2dfd8;
+  --muted: #5a5855;
+  --hint: #3a3835;
+  --accent: #d4f54e;
+  --accent-text: #0c0c0b;
+  --gemini: #8B5CF6;
+  --r: 8px;
+  --sans: 'DM Sans', sans-serif;
+  --mono: 'DM Mono', monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+#__next { height: 100%; }
+
+textarea, input[type=text], input[type=email], select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--sans);
+  color: var(--text);
+  outline: none;
+  resize: none;
+  width: 100%;
+  transition: border-color .15s;
+  -webkit-appearance: none;
+}
+
+textarea:focus, input:focus, select:focus {
+  border-color: var(--border2);
+}
+
+select {
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a5855'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
