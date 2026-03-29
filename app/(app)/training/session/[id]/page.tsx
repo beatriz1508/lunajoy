@@ -18,11 +18,10 @@ import {
   Trophy,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { TRAINING_SCENARIOS, SEED_USER } from "@/lib/seedData"
-import { getItem, setItem } from "@/lib/storage"
-import type { HistoryEntry } from "@/lib/seedData"
-
-type User = typeof SEED_USER
+import { TRAINING_SCENARIOS } from "@/lib/seedData"
+import { addXp } from "@/lib/db/profile"
+import { upsertTrainingProgress } from "@/lib/db/training"
+import { saveHistoryEntry } from "@/lib/db/history"
 
 interface ChatMessage {
   id: string
@@ -37,8 +36,6 @@ interface FeedbackData {
   modelAnswer: string
 }
 
-const levelThresholds = [0, 200, 500, 1000, 2000]
-const levelNames = ["Rookie", "Representative", "Consultant", "Expert"]
 const TURNS_BEFORE_FEEDBACK = 3
 
 function parseFeedback(text: string): FeedbackData {
@@ -210,59 +207,27 @@ export default function TrainingSession({
     setXpAwarded(true)
 
     const xpToAdd = Math.round((scenario.xpReward * feedback.score) / 100)
-    const user = getItem<User>("user", SEED_USER)
-    const newXp = user.xp + xpToAdd
-    let newLevel = user.level
-    let newLevelName = user.levelName
 
-    for (let i = levelThresholds.length - 1; i >= 0; i--) {
-      if (newXp >= levelThresholds[i]) {
-        newLevel = i + 1
-        newLevelName = levelNames[i] ?? "Expert"
-        break
-      }
-    }
-
-    const updatedUser = {
-      ...user,
-      xp: newXp,
-      level: newLevel,
-      levelName: newLevelName,
-    }
-    setItem("user", updatedUser)
-
-    const tp = getItem<
-      Record<string, { completed: boolean; score: number; xpEarned: number }>
-    >("training_progress", {})
-    setItem("training_progress", {
-      ...tp,
-      [scenario.id]: {
+    Promise.all([
+      addXp(xpToAdd),
+      upsertTrainingProgress(scenario.id, {
         completed: true,
         score: feedback.score,
-        xpEarned: xpToAdd,
-      },
-    })
-
-    const history = getItem<HistoryEntry[]>("history", [])
-    setItem("history", [
-      ...history,
-      {
-        id: crypto.randomUUID(),
+        xp_earned: xpToAdd,
+      }),
+      saveHistoryEntry({
         type: "training",
         title: `Training: ${scenario.name}`,
-        date: new Date().toISOString(),
         summary: `Score: ${feedback.score}/100. ${feedback.whatWentWell.slice(0, 120)}`,
-        fullContent: rawFeedback,
+        full_content: rawFeedback,
         score: feedback.score,
-        xpEarned: xpToAdd,
-      },
-    ])
-
-    if (newLevel > user.level) {
-      toast.success(`Level Up! You're now ${newLevelName}!`)
-    } else {
+        xp_earned: xpToAdd,
+      }),
+    ]).then(() => {
       toast.success(`+${xpToAdd} XP earned!`)
-    }
+    }).catch(() => {
+      toast.error("Failed to save progress.")
+    })
   }, [feedback, xpAwarded, scenario, rawFeedback])
 
   if (!scenario) {

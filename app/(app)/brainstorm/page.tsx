@@ -18,9 +18,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { getKnowledgeContext } from "@/lib/knowledge"
-import { getItem, setItem } from "@/lib/storage"
-import type { HistoryEntry } from "@/lib/seedData"
+import { getKnowledgeContext } from "@/lib/db/knowledge"
+import { saveHistoryEntry } from "@/lib/db/history"
 
 interface PrepForm {
   prospectName: string
@@ -161,7 +160,7 @@ export default function BrainstormPage() {
   const [rawCompletion, setRawCompletion] = useState("")
 
   useEffect(() => {
-    setKnowledgeContext(getKnowledgeContext())
+    getKnowledgeContext().then(setKnowledgeContext)
   }, [])
 
   const { complete, completion, isLoading } = useCompletion({
@@ -187,17 +186,13 @@ export default function BrainstormPage() {
     })
   }
 
-  const saveSession = () => {
-    const history = getItem<HistoryEntry[]>("history", [])
-    const entry: HistoryEntry = {
-      id: crypto.randomUUID(),
+  const saveSession = async () => {
+    await saveHistoryEntry({
       type: "brainstorm",
       title: `Brainstorm — ${form.prospectName} (${form.industry})`,
-      date: new Date().toISOString(),
       summary: `${form.dealStage} stage. Challenges: ${form.challenges.slice(0, 100)}`,
-      fullContent: rawCompletion,
-    }
-    setItem("history", [...history, entry])
+      full_content: rawCompletion,
+    })
     setSaved(true)
     toast.success("Session saved to history!")
   }
@@ -401,7 +396,7 @@ export default function BrainstormPage() {
           <div className="flex justify-end mt-4">
             {!saved ? (
               <Button
-                onClick={saveSession}
+                onClick={() => void saveSession()}
                 className="gap-1.5 bg-purple-600 hover:bg-purple-700"
               >
                 <Save className="w-4 h-4" />

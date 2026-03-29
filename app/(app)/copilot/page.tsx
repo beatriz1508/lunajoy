@@ -17,9 +17,8 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
-import { getKnowledgeContext } from "@/lib/knowledge"
-import { getItem, setItem } from "@/lib/storage"
-import type { HistoryEntry } from "@/lib/seedData"
+import { getKnowledgeContext } from "@/lib/db/knowledge"
+import { saveHistoryEntry } from "@/lib/db/history"
 
 interface AnalysisSection {
   id: string
@@ -173,7 +172,7 @@ export default function CopilotPage() {
   const prevCompletionRef = useRef("")
 
   useEffect(() => {
-    setKnowledgeContext(getKnowledgeContext())
+    getKnowledgeContext().then(setKnowledgeContext)
   }, [])
 
   const { complete, completion, isLoading } = useCompletion({
@@ -200,18 +199,14 @@ export default function CopilotPage() {
     })
   }
 
-  const saveAnalysis = () => {
+  const saveAnalysis = async () => {
     if (!sections) return
-    const history = getItem<HistoryEntry[]>("history", [])
-    const entry: HistoryEntry = {
-      id: crypto.randomUUID(),
+    await saveHistoryEntry({
       type: "copilot",
       title: `Meeting Analysis — ${new Date().toLocaleDateString()}`,
-      date: new Date().toISOString(),
       summary: sections.summary?.slice(0, 200) ?? "",
-      fullContent: completion,
-    }
-    setItem("history", [...history, entry])
+      full_content: completion,
+    })
     setSaved(true)
     toast.success("Analysis saved to history!")
   }
@@ -260,7 +255,7 @@ export default function CopilotPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={saveAnalysis}
+                  onClick={() => void saveAnalysis()}
                   className="gap-1.5"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -376,7 +371,7 @@ export default function CopilotPage() {
             <div className="flex justify-end gap-2 pt-2">
               {!saved ? (
                 <Button
-                  onClick={saveAnalysis}
+                  onClick={() => void saveAnalysis()}
                   className="gap-1.5 bg-purple-600 hover:bg-purple-700"
                 >
                   <Save className="w-4 h-4" />

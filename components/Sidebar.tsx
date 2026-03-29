@@ -1,8 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import {
   Home,
@@ -13,11 +13,10 @@ import {
   History,
   Menu,
   X,
-  User,
+  LogOut,
 } from "lucide-react"
-import { SEED_USER } from "@/lib/seedData"
-import { getItem } from "@/lib/storage"
-import { useEffect } from "react"
+import { createClient } from "@/lib/supabase/client"
+import type { Profile } from "@/lib/db/profile"
 
 const navItems = [
   { href: "/", label: "Home", icon: Home },
@@ -30,12 +29,54 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [user, setUser] = useState(SEED_USER)
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    setUser(getItem("user", SEED_USER))
+    const supabase = createClient()
+
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user) return
+
+      // Get avatar from OAuth metadata
+      setAvatarUrl(user.user_metadata?.avatar_url ?? null)
+
+      // Get profile (XP, level)
+      const { data } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single()
+      if (data) setProfile(data)
+    }
+
+    loadUser()
+
+    // Refresh profile when it changes (e.g. after XP update)
+    const channel = supabase
+      .channel("profile-changes")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "profiles" },
+        (payload) => setProfile(payload.new as Profile)
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [])
+
+  const handleSignOut = async () => {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push("/login")
+  }
 
   const isActive = (href: string) =>
     href === "/"
@@ -75,17 +116,34 @@ export function Sidebar() {
   const UserFooter = () => (
     <div className="px-3 py-4 border-t border-slate-200">
       <div className="flex items-center gap-3 px-3 py-2">
-        <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0">
-          <User className="w-4 h-4 text-purple-600" />
-        </div>
-        <div className="min-w-0">
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt="avatar"
+            className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+          />
+        ) : (
+          <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0">
+            <span className="text-xs font-bold text-purple-600">
+              {profile?.full_name?.[0]?.toUpperCase() ?? "?"}
+            </span>
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-slate-800 truncate">
-            {user.name}
+            {profile?.full_name ?? "Loading…"}
           </p>
           <p className="text-xs text-slate-500">
-            Lv.{user.level} · {user.levelName}
+            Lv.{profile?.level ?? 1} · {profile?.level_name ?? "Rookie"}
           </p>
         </div>
+        <button
+          onClick={handleSignOut}
+          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 flex-shrink-0"
+          title="Sign out"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   )
@@ -119,13 +177,8 @@ export function Sidebar() {
         <button
           onClick={() => setMobileOpen(!mobileOpen)}
           className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
-          aria-label="Toggle menu"
         >
-          {mobileOpen ? (
-            <X className="w-5 h-5" />
-          ) : (
-            <Menu className="w-5 h-5" />
-          )}
+          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </header>
 
