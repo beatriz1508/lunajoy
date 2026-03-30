@@ -93,6 +93,54 @@ export const TRAINING_SCENARIOS: TrainingScenario[] = [
     scenario:
       "David says: \"We signed with [Competitor] last year and we're 8 months into a 3-year contract. Our CTO pushed for them. Honestly, results have been underwhelming, but switching costs are real. Walk me through why I should even consider disrupting this.\"",
   },
+  {
+    id: "4",
+    name: "The Stalled Negotiation",
+    description:
+      "An OBGYN clinic has been 'reviewing internally' for 3 weeks with no timeline. The deal is going cold.",
+    difficulty: "Medium",
+    xpReward: 100,
+    prospectProfile:
+      "Katrina, Clinic Administrator at a busy OBGYN practice. Interested but risk-averse. Reports to a Medical Director who is hard to reach.",
+    scenario:
+      "Katrina sounded excited on your last call two weeks ago, but now she's going quiet. You finally get her on the phone and she says: \"We're still interested in the LunaJoy program, we just haven't had time to sit down as a team and review it. Things are really busy right now. Can we reconnect next month?\"",
+  },
+  {
+    id: "5",
+    name: "The Revenue Skeptic",
+    description:
+      "The billing manager is interested but unconvinced the BHI revenue will actually materialize for their specific clinic.",
+    difficulty: "Medium",
+    xpReward: 100,
+    prospectProfile:
+      "James, Billing Manager at a 3-physician OBGYN clinic. Numbers-driven, skeptical of projections, has been burned by vendor promises before.",
+    scenario:
+      "James says: \"Look, the concept sounds good on paper, but I've heard these revenue promises before and they never pan out the way vendors say. You're telling me we can bill BHI codes and get reimbursed, but I'd need to see exactly what that looks like for OUR patient volume and OUR payer mix before I take this to the doctor. How do I know this isn't theoretical?\"",
+  },
+  {
+    id: "6",
+    name: "Champion Without Authority",
+    description:
+      "Your clinic champion loves the program but needs to get approval from a Medical Director who is skeptical.",
+    difficulty: "Hard",
+    xpReward: 200,
+    prospectProfile:
+      "Diana, Clinical Coordinator who initiated the conversation with LunaJoy. Enthusiastic champion, but the Medical Director Dr. Patel controls all vendor decisions and has concerns about workflow disruption.",
+    scenario:
+      "Diana calls you excited: \"I brought it up in our staff meeting and everyone loved the idea. But Dr. Patel is worried it'll add work for the providers. She said, and I quote: 'I don't want my physicians having to manage another vendor relationship on top of everything else.' She's the one who needs to sign off. I'm not sure how to convince her.\"",
+  },
+  {
+    id: "7",
+    name: "Convert the Pilot to a Commitment",
+    description:
+      "The clinic wants to 'try with a few patients' indefinitely. You need to define scope and set a conversion milestone.",
+    difficulty: "Hard",
+    xpReward: 200,
+    prospectProfile:
+      "Dr. Rivera, Medical Director of a 5-physician OBGYN group. Cautious decision-maker. Open to the program but wants to 'see how it goes' before committing.",
+    scenario:
+      "Dr. Rivera says: \"We're open to moving forward, but we want to start slow. Let's refer maybe 3 or 4 patients and see what happens. If it works out, we'll expand from there. We don't want to commit to anything formal yet — let's just see how it goes.\"",
+  },
 ]
 
 export const SEED_USER = {
