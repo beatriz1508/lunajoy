@@ -11,6 +11,7 @@ import {
   BookOpen,
   GraduationCap,
   History,
+  CalendarDays,
   Menu,
   X,
   LogOut,
@@ -20,6 +21,7 @@ import type { Profile } from "@/lib/db/profile"
 
 const navItems = [
   { href: "/", label: "Home", icon: Home },
+  { href: "/meetings", label: "Meetings", icon: CalendarDays },
   { href: "/copilot", label: "Copilot", icon: Mic2 },
   { href: "/brainstorm", label: "Brainstorm", icon: Lightbulb },
   { href: "/knowledge", label: "Knowledge Base", icon: BookOpen },
