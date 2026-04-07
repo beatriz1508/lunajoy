@@ -169,6 +169,7 @@ export default function CopilotPage() {
   const [sections, setSections] = useState<Record<string, string> | null>(null)
   const [emailDraft, setEmailDraft] = useState("")
   const [saved, setSaved] = useState(false)
+  const [debugInfo, setDebugInfo] = useState("")
   const prevCompletionRef = useRef("")
 
   useEffect(() => {
@@ -179,11 +180,15 @@ export default function CopilotPage() {
     api: "/api/analyze",
     streamProtocol: "text",
     onFinish: (_prompt, result) => {
+      setDebugInfo(`onFinish called. result length: ${result?.length ?? "null"}. first 300 chars: ${result?.slice(0, 300) ?? "EMPTY"}`)
       const parsed = parseAnalysis(result)
       setSections(parsed)
       setEmailDraft(parsed.email ?? "")
     },
-    onError: () => toast.error("Analysis failed. Check your API key."),
+    onError: (err) => {
+      setDebugInfo(`onError: ${err?.message ?? String(err)}`)
+      toast.error("Analysis failed. Check your API key.")
+    },
   })
 
   const handleAnalyze = async () => {
@@ -400,6 +405,12 @@ export default function CopilotPage() {
             <p className="text-slate-400 text-xs mt-1">
               Paste a transcript above and click Analyze to get started.
             </p>
+          </div>
+        )}
+        {/* Debug info — remove after fixing */}
+        {debugInfo && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
+            <p className="text-xs font-mono text-red-800 break-all whitespace-pre-wrap">{debugInfo}</p>
           </div>
         )}
       </div>
