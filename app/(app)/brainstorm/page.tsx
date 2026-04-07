@@ -165,6 +165,7 @@ export default function BrainstormPage() {
 
   const { complete, completion, isLoading } = useCompletion({
     api: "/api/brainstorm",
+    streamProtocol: "text",
     onFinish: (_prompt, result) => {
       const parsed = parsePrep(result)
       setSections(parsed)

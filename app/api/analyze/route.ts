@@ -51,5 +51,5 @@ ${transcript}`,
     ],
   })
 
-  return result.toDataStreamResponse()
+  return result.toTextStreamResponse()
 }

@@ -49,5 +49,5 @@ Return your response using EXACTLY these section headers (in order):
     ],
   })
 
-  return result.toDataStreamResponse()
+  return result.toTextStreamResponse()
 }

@@ -172,6 +172,7 @@ export default function TrainingSession({
     isLoading: feedbackLoading,
   } = useCompletion({
     api: "/api/training",
+    streamProtocol: "text",
     onFinish: (_p, result) => {
       const parsed = parseFeedback(result)
       setFeedback(parsed)

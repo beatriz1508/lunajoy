@@ -177,6 +177,7 @@ export default function CopilotPage() {
 
   const { complete, completion, isLoading } = useCompletion({
     api: "/api/analyze",
+    streamProtocol: "text",
     onFinish: (_prompt, result) => {
       const parsed = parseAnalysis(result)
       setSections(parsed)

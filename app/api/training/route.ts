@@ -47,7 +47,7 @@ Provide structured feedback using EXACTLY these section headers:
       ],
     })
 
-    return result.toDataStreamResponse()
+    return result.toTextStreamResponse()
   }
 
   // Roleplay mode (triggered by useChat)
@@ -77,5 +77,5 @@ RULES:
     messages,
   })
 
-  return result.toDataStreamResponse()
+  return result.toTextStreamResponse()
 }
