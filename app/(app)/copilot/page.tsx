@@ -191,21 +191,23 @@ export default function CopilotPage() {
     },
   })
 
-  // Direct fetch test to bypass useCompletion
+  // Test API key + Gemini directly
   const handleTestDirect = async () => {
-    setDebugInfo("Testing direct fetch to /api/analyze...")
-    setSections(null)
+    setDebugInfo("Step 1: Checking API key...")
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: "Sales rep: Hi, how are you?\nProspect: I'm not interested in your product, it's too expensive.", knowledgeBase: "" }),
-      })
-      const text = await res.text()
-      setDebugInfo(`Direct fetch: status=${res.status}, length=${text.length}, first 500 chars: [${text.slice(0, 500)}]`)
+      // Step 1: Check API key
+      const keyRes = await fetch("/api/analyze/test")
+      const keyData = await keyRes.json()
+
+      // Step 2: Test Gemini generateText
+      setDebugInfo(`Step 1: API key=${keyData.hasApiKey}, prefix=${keyData.keyPrefix}. Step 2: Testing Gemini...`)
+      const geminiRes = await fetch("/api/analyze/test", { method: "POST" })
+      const geminiData = await geminiRes.json()
+
+      setDebugInfo(`API key: ${keyData.hasApiKey} (${keyData.keyPrefix}). Gemini test: status=${geminiRes.status}, success=${geminiData.success}, text=[${geminiData.text ?? geminiData.error}]`)
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
-      setDebugInfo(`Direct fetch error: ${message}`)
+      setDebugInfo(`Test error: ${message}`)
     }
   }
 

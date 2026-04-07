@@ -1,48 +1,36 @@
-// Simple test endpoint to verify streaming works
+import { google } from "@ai-sdk/google"
+import { generateText, streamText } from "ai"
+
+// Test 1: Plain text (no AI) — GET /api/analyze/test
+export async function GET() {
+  return new Response(
+    JSON.stringify({
+      hasApiKey: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+      keyPrefix: process.env.GOOGLE_GENERATIVE_AI_API_KEY?.slice(0, 8) ?? "NOT SET",
+    }),
+    { headers: { "Content-Type": "application/json" } }
+  )
+}
+
+// Test 2: Gemini generateText (non-streaming) — POST /api/analyze/test
 export async function POST() {
-  const text = `## Executive Summary
-This is a test analysis to verify streaming works correctly.
+  try {
+    // Test with generateText (non-streaming) to isolate the issue
+    const { text } = await generateText({
+      model: google("gemini-2.0-flash"),
+      prompt: "Say exactly: Hello, Gemini is working!",
+    })
 
-## Key Objections
-- Test objection 1
-- Test objection 2
-
-## Objection Handling
-- Objection 1 was handled by testing
-- Objection 2 was handled by debugging
-
-## Follow-Up Actions
-- [ ] Verify this test works
-- [ ] Remove test endpoint
-
-## Follow-Up Email Draft
-Subject: Test Follow-Up
-
-Hi,
-
-This is a test email draft.
-
-Best regards`
-
-  // Simulate streaming by returning the text as a stream
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream({
-    start(controller) {
-      const words = text.split(" ")
-      let i = 0
-      const interval = setInterval(() => {
-        if (i < words.length) {
-          controller.enqueue(encoder.encode(words[i] + " "))
-          i++
-        } else {
-          controller.close()
-          clearInterval(interval)
-        }
-      }, 20)
-    },
-  })
-
-  return new Response(stream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8" },
-  })
+    return new Response(
+      JSON.stringify({ success: true, text, length: text.length }),
+      { headers: { "Content-Type": "application/json" } }
+    )
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    const stack = error instanceof Error ? error.stack?.slice(0, 500) : ""
+    return new Response(
+      JSON.stringify({ success: false, error: message, stack }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    )
+  }
 }
