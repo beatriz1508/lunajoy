@@ -1,8 +1,6 @@
 import { google } from "@ai-sdk/google"
 import { streamText } from "ai"
 
-export const runtime = "edge"
-
 const SYSTEM_PROMPT = `You are an expert B2B sales consultant with 15+ years experience.
 Your role is to help sales reps become consultants — not just pitch features,
 but diagnose problems, challenge assumptions, and build business cases.
