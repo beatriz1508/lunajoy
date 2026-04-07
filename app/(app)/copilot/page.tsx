@@ -180,7 +180,7 @@ export default function CopilotPage() {
     api: "/api/analyze",
     streamProtocol: "text",
     onFinish: (_prompt, result) => {
-      setDebugInfo(`onFinish called. result length: ${result?.length ?? "null"}. first 300 chars: ${result?.slice(0, 300) ?? "EMPTY"}`)
+      setDebugInfo(`onFinish: result length=${result?.length ?? "null"}, completion length=${completion?.length ?? "null"}. result first 200: [${result?.slice(0, 200) ?? "EMPTY"}]`)
       const parsed = parseAnalysis(result)
       setSections(parsed)
       setEmailDraft(parsed.email ?? "")
@@ -191,6 +191,24 @@ export default function CopilotPage() {
     },
   })
 
+  // Direct fetch test to bypass useCompletion
+  const handleTestDirect = async () => {
+    setDebugInfo("Testing direct fetch to /api/analyze...")
+    setSections(null)
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: "Sales rep: Hi, how are you?\nProspect: I'm not interested in your product, it's too expensive.", knowledgeBase: "" }),
+      })
+      const text = await res.text()
+      setDebugInfo(`Direct fetch: status=${res.status}, length=${text.length}, first 500 chars: [${text.slice(0, 500)}]`)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setDebugInfo(`Direct fetch error: ${message}`)
+    }
+  }
+
   const handleAnalyze = async () => {
     if (!transcript.trim()) {
       toast.error("Please paste a meeting transcript first.")
@@ -198,6 +216,7 @@ export default function CopilotPage() {
     }
     setSections(null)
     setSaved(false)
+    setDebugInfo("Calling complete()...")
     prevCompletionRef.current = ""
     await complete("", {
       body: { transcript, knowledgeBase: knowledgeContext },
@@ -408,11 +427,17 @@ export default function CopilotPage() {
           </div>
         )}
         {/* Debug info — remove after fixing */}
-        {debugInfo && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
+          <button
+            onClick={handleTestDirect}
+            className="mb-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+          >
+            🧪 Test API Directly
+          </button>
+          {debugInfo && (
             <p className="text-xs font-mono text-red-800 break-all whitespace-pre-wrap">{debugInfo}</p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )
