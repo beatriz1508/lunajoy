@@ -110,25 +110,23 @@ export default function MeetingsPage() {
   }, [])
 
   useEffect(() => {
-    const init = async () => {
+    // Get provider token for Drive transcript search (still needs user OAuth)
+    const initToken = async () => {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.provider_token ?? null
-      setProviderToken(token)
+      setProviderToken(session?.provider_token ?? null)
+    }
+    initToken()
+  }, [])
 
-      if (!token) {
-        setError("Google access token not found. Please sign out and sign in again to grant Calendar access.")
-        setLoading(false)
-        return
-      }
-
+  useEffect(() => {
+    const loadMeetings = async () => {
       try {
-        const res = await fetch("/api/meetings", {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        // Uses service account — no user token needed
+        const res = await fetch("/api/meetings")
         if (!res.ok) {
           const err = await res.json()
-          throw new Error(err?.error?.message ?? "Failed to load meetings")
+          throw new Error(err?.error ?? "Failed to load meetings")
         }
         const data = await res.json()
         const items: CalendarEvent[] = (data.items ?? []).filter(
@@ -146,7 +144,7 @@ export default function MeetingsPage() {
         setLoading(false)
       }
     }
-    init()
+    loadMeetings()
   }, [])
 
   const findTranscript = useCallback(async (event: CalendarEvent) => {
