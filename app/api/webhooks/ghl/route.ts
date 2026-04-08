@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
       endTime,
       description: descriptionParts.join("\n"),
       attendees,
-      addMeet: true,
+      addMeet: false,
     })
 
     return NextResponse.json({
