@@ -1,4 +1,4 @@
-import { google } from "@ai-sdk/google"
+import { openai } from "@ai-sdk/openai"
 import { streamText } from "ai"
 
 const SYSTEM_PROMPT = `You are an expert B2B sales consultant with 15+ years experience.
@@ -15,9 +15,9 @@ export async function POST(req: Request) {
     }
 
     // Check if API key is available
-    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    if (!process.env.OPENAI_API_KEY) {
       return new Response(
-        JSON.stringify({ error: "GOOGLE_GENERATIVE_AI_API_KEY not set" }),
+        JSON.stringify({ error: "OPENAI_API_KEY not set" }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       )
     }
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
         : ""
 
     const result = streamText({
-      model: google("gemini-2.0-flash"),
+      model: openai("gpt-4o-mini"),
       system: SYSTEM_PROMPT + knowledgeSection,
       messages: [
         {

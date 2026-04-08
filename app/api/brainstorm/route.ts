@@ -1,4 +1,4 @@
-import { google } from "@ai-sdk/google"
+import { openai } from "@ai-sdk/openai"
 import { streamText } from "ai"
 
 const SYSTEM_PROMPT = `You are an expert B2B sales consultant with 15+ years experience.
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
       : ""
 
   const result = await streamText({
-    model: google("gemini-2.0-flash"),
+    model: openai("gpt-4o-mini"),
     system: SYSTEM_PROMPT + knowledgeSection,
     messages: [
       {

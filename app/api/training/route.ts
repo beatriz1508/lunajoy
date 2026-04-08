@@ -1,4 +1,4 @@
-import { google } from "@ai-sdk/google"
+import { openai } from "@ai-sdk/openai"
 import { streamText } from "ai"
 import { TRAINING_SCENARIOS } from "@/lib/seedData"
 
@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     const sc = TRAINING_SCENARIOS.find((s) => s.id === scenarioId)
 
     const result = await streamText({
-      model: google("gemini-2.0-flash"),
+      model: openai("gpt-4o-mini"),
       system: BASE_SYSTEM,
       messages: [
         {
@@ -59,7 +59,7 @@ Provide structured feedback using EXACTLY these section headers:
   }
 
   const result = await streamText({
-    model: google("gemini-2.0-flash"),
+    model: openai("gpt-4o-mini"),
     system: `${BASE_SYSTEM}
 
 You are now playing the role of a prospect in a B2B sales training scenario.

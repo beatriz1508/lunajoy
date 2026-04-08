@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useCompletion } from "@ai-sdk/react"
 import { toast } from "sonner"
 import {
@@ -169,9 +169,6 @@ export default function CopilotPage() {
   const [sections, setSections] = useState<Record<string, string> | null>(null)
   const [emailDraft, setEmailDraft] = useState("")
   const [saved, setSaved] = useState(false)
-  const [debugInfo, setDebugInfo] = useState("")
-  const prevCompletionRef = useRef("")
-
   useEffect(() => {
     getKnowledgeContext().then(setKnowledgeContext)
   }, [])
@@ -180,36 +177,14 @@ export default function CopilotPage() {
     api: "/api/analyze",
     streamProtocol: "text",
     onFinish: (_prompt, result) => {
-      setDebugInfo(`onFinish: result length=${result?.length ?? "null"}, completion length=${completion?.length ?? "null"}. result first 200: [${result?.slice(0, 200) ?? "EMPTY"}]`)
       const parsed = parseAnalysis(result)
       setSections(parsed)
       setEmailDraft(parsed.email ?? "")
     },
-    onError: (err) => {
-      setDebugInfo(`onError: ${err?.message ?? String(err)}`)
+    onError: () => {
       toast.error("Analysis failed. Check your API key.")
     },
   })
-
-  // Test API key + Gemini directly
-  const handleTestDirect = async () => {
-    setDebugInfo("Step 1: Checking API key...")
-    try {
-      // Step 1: Check API key
-      const keyRes = await fetch("/api/analyze/test")
-      const keyData = await keyRes.json()
-
-      // Step 2: Test Gemini generateText
-      setDebugInfo(`Step 1: API key=${keyData.hasApiKey}, prefix=${keyData.keyPrefix}. Step 2: Testing Gemini...`)
-      const geminiRes = await fetch("/api/analyze/test", { method: "POST" })
-      const geminiData = await geminiRes.json()
-
-      setDebugInfo(`API key: ${keyData.hasApiKey} (${keyData.keyPrefix}). Gemini test: status=${geminiRes.status}, success=${geminiData.success}, text=[${geminiData.text ?? geminiData.error}]`)
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
-      setDebugInfo(`Test error: ${message}`)
-    }
-  }
 
   const handleAnalyze = async () => {
     if (!transcript.trim()) {
@@ -218,8 +193,6 @@ export default function CopilotPage() {
     }
     setSections(null)
     setSaved(false)
-    setDebugInfo("Calling complete()...")
-    prevCompletionRef.current = ""
     await complete("", {
       body: { transcript, knowledgeBase: knowledgeContext },
     })
@@ -428,18 +401,6 @@ export default function CopilotPage() {
             </p>
           </div>
         )}
-        {/* Debug info — remove after fixing */}
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
-          <button
-            onClick={handleTestDirect}
-            className="mb-3 px-3 py-1.5 bg-red-600 text-white text-xs rounded hover:bg-red-700"
-          >
-            🧪 Test API Directly
-          </button>
-          {debugInfo && (
-            <p className="text-xs font-mono text-red-800 break-all whitespace-pre-wrap">{debugInfo}</p>
-          )}
-        </div>
       </div>
     </div>
   )
