@@ -1,12 +1,27 @@
 import { GoogleAuth } from "google-auth-library"
 
+function parsePrivateKey(raw: string): string {
+  // Handle multiple formats Vercel might store the key in:
+  // 1. JSON-escaped: literal \n characters → replace with real newlines
+  let key = raw.replace(/\\n/g, "\n")
+  // 2. Remove any surrounding quotes
+  key = key.replace(/^["']|["']$/g, "")
+  // 3. Ensure proper PEM format
+  if (!key.includes("-----BEGIN")) {
+    key = `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----\n`
+  }
+  return key
+}
+
 function getAuth() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL
-  const key = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n")
+  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
 
-  if (!email || !key) {
+  if (!email || !rawKey) {
     throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_EMAIL or GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY")
   }
+
+  const key = parsePrivateKey(rawKey)
 
   return new GoogleAuth({
     credentials: { client_email: email, private_key: key },
