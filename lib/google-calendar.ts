@@ -106,7 +106,7 @@ export async function listCalendarEvents(params?: {
   const now = new Date()
   const searchParams = new URLSearchParams({
     timeMin: params?.timeMin ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-    timeMax: params?.timeMax ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    timeMax: params?.timeMax ?? new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(),
     orderBy: "startTime",
     singleEvents: "true",
     maxResults: String(params?.maxResults ?? 50),
