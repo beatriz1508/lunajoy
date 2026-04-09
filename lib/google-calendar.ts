@@ -57,8 +57,8 @@ export async function createCalendarEvent(params: {
 
   const event: Record<string, unknown> = {
     summary: params.title,
-    start: { dateTime: params.startTime },
-    end: { dateTime: params.endTime },
+    start: { dateTime: params.startTime, timeZone: "America/Recife" },
+    end: { dateTime: params.endTime, timeZone: "America/Recife" },
     description: params.description ?? "",
   }
 
