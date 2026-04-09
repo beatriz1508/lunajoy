@@ -13,31 +13,38 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
+    console.log("GHL webhook received:", JSON.stringify(body).slice(0, 1000))
 
-    // Extract appointment data — GHL webhook payload format
+    // Extract appointment data — flexible: supports nested or flat payload
     const appointment = body.appointment ?? body
     const contact = body.contact ?? {}
     const staff = body.staff ?? body.assignedUser ?? {}
 
-    const title = appointment.title ?? appointment.summary ?? "Sales Meeting"
-    const startTime = appointment.startTime ?? appointment.start_time ?? appointment.start
-    const endTime = appointment.endTime ?? appointment.end_time ?? appointment.end
+    const title = appointment.title ?? appointment.summary ?? body.title ?? "Sales Meeting"
+    const startTime = appointment.startTime ?? appointment.start_time ?? appointment.start ?? body.startTime ?? body.start_time
+    const endTime = appointment.endTime ?? appointment.end_time ?? appointment.end ?? body.endTime ?? body.end_time
 
     if (!startTime || !endTime) {
+      console.error("GHL webhook: missing dates. Body keys:", Object.keys(body), "Appointment keys:", Object.keys(appointment))
       return NextResponse.json(
-        { error: "Missing startTime or endTime" },
+        { error: "Missing startTime or endTime", receivedKeys: Object.keys(body), appointmentKeys: Object.keys(appointment) },
         { status: 400 }
       )
     }
 
     // Build description with prospect and rep info
     const descriptionParts = []
-    if (contact.name) descriptionParts.push(`Prospect: ${contact.name}`)
-    if (contact.email) descriptionParts.push(`Email: ${contact.email}`)
-    if (contact.phone) descriptionParts.push(`Phone: ${contact.phone}`)
-    if (contact.company || contact.company_name)
-      descriptionParts.push(`Company: ${contact.company ?? contact.company_name}`)
-    if (staff.name) descriptionParts.push(`Assigned Rep: ${staff.name}`)
+    const contactName = contact.name ?? body.contactName ?? ""
+    const contactEmail = contact.email ?? body.contactEmail ?? ""
+    const contactPhone = contact.phone ?? body.contactPhone ?? ""
+    const contactCompany = contact.company ?? contact.company_name ?? body.contactCompany ?? ""
+    const staffName = staff.name ?? body.staffName ?? ""
+
+    if (contactName) descriptionParts.push(`Prospect: ${contactName}`)
+    if (contactEmail) descriptionParts.push(`Email: ${contactEmail}`)
+    if (contactPhone) descriptionParts.push(`Phone: ${contactPhone}`)
+    if (contactCompany) descriptionParts.push(`Company: ${contactCompany}`)
+    if (staffName) descriptionParts.push(`Assigned Rep: ${staffName}`)
     descriptionParts.push(`\nBooked via Go High Level`)
 
     // Note: Service accounts cannot invite attendees without Domain-Wide Delegation,
@@ -45,7 +52,7 @@ export async function POST(req: NextRequest) {
 
     // Create the event in the shared Sales Team Meetings calendar
     const event = await createCalendarEvent({
-      title: contact.name ? `${title} - ${contact.name}` : title,
+      title: contactName ? `${title} - ${contactName}` : title,
       startTime,
       endTime,
       description: descriptionParts.join("\n"),
@@ -63,4 +70,9 @@ export async function POST(req: NextRequest) {
     console.error("GHL webhook error:", message)
     return NextResponse.json({ error: message }, { status: 500 })
   }
+}
+
+// Also handle GET for testing connectivity
+export async function GET() {
+  return NextResponse.json({ status: "ok", message: "GHL webhook endpoint is active" })
 }
