@@ -1,6 +1,25 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createCalendarEvent } from "@/lib/google-calendar"
 
+/**
+ * Parse date strings from GHL into ISO 8601 format.
+ * GHL sends: "Friday, April 17, 2026 10:30 AM"
+ * Google Calendar needs: "2026-04-17T10:30:00"
+ */
+function parseGHLDate(dateStr: string): string {
+  // If already ISO format, return as-is
+  if (dateStr.includes("T") || /^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+    return dateStr
+  }
+  // Try parsing the human-readable format
+  const parsed = new Date(dateStr)
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString()
+  }
+  // Return original if we can't parse
+  return dateStr
+}
+
 export async function POST(req: NextRequest) {
   try {
     // Verify webhook secret if configured
@@ -24,8 +43,10 @@ export async function POST(req: NextRequest) {
     const staff = body.staff ?? body.assignedUser ?? {}
 
     const title = appointment.title ?? appointment.summary ?? body.title ?? "Sales Meeting"
-    const startTime = appointment.startTime ?? appointment.start_time ?? appointment.start ?? body.startTime ?? body.start_time
-    const endTime = appointment.endTime ?? appointment.end_time ?? appointment.end ?? body.endTime ?? body.end_time
+    const rawStart = appointment.startTime ?? appointment.start_time ?? appointment.start ?? body.startTime ?? body.start_time
+    const rawEnd = appointment.endTime ?? appointment.end_time ?? appointment.end ?? body.endTime ?? body.end_time
+    const startTime = rawStart ? parseGHLDate(String(rawStart)) : undefined
+    const endTime = rawEnd ? parseGHLDate(String(rawEnd)) : undefined
 
     if (!startTime || !endTime) {
       console.error("GHL webhook: missing dates. Body keys:", Object.keys(body), "Appointment keys:", Object.keys(appointment))
