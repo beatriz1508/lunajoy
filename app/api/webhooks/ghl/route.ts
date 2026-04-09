@@ -40,10 +40,8 @@ export async function POST(req: NextRequest) {
     if (staff.name) descriptionParts.push(`Assigned Rep: ${staff.name}`)
     descriptionParts.push(`\nBooked via Go High Level`)
 
-    // Collect attendee emails
-    const attendees: string[] = []
-    if (contact.email) attendees.push(contact.email)
-    if (staff.email) attendees.push(staff.email)
+    // Note: Service accounts cannot invite attendees without Domain-Wide Delegation,
+    // so we include contact/staff info in the description instead.
 
     // Create the event in the shared Sales Team Meetings calendar
     const event = await createCalendarEvent({
@@ -51,7 +49,6 @@ export async function POST(req: NextRequest) {
       startTime,
       endTime,
       description: descriptionParts.join("\n"),
-      attendees,
       addMeet: false,
     })
 
