@@ -2,21 +2,57 @@ import { NextRequest, NextResponse } from "next/server"
 import { createCalendarEvent } from "@/lib/google-calendar"
 
 /**
- * Parse date strings from GHL into ISO 8601 format.
+ * Parse date strings from GHL into format Google Calendar accepts.
  * GHL sends: "Friday, April 17, 2026 10:30 AM"
- * Google Calendar needs: "2026-04-17T10:30:00"
+ * Google Calendar needs: "2026-04-17T10:30:00" (no Z, no ms)
+ *
+ * We parse the date and format as local time (YYYY-MM-DDTHH:MM:SS)
+ * paired with timeZone in the Calendar API request.
  */
 function parseGHLDate(dateStr: string): string {
-  // If already ISO format, return as-is
-  if (dateStr.includes("T") || /^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+  // If already ISO format with T, return as-is
+  if (/^\d{4}-\d{2}-\d{2}T/.test(dateStr)) {
     return dateStr
   }
-  // Try parsing the human-readable format
+
+  // Remove day name prefix like "Friday, " "Tuesday, " etc.
+  const cleaned = dateStr.replace(/^[A-Za-z]+,\s*/, "")
+
+  // Parse: "April 17, 2026 10:30 AM"
+  const match = cleaned.match(
+    /^(\w+)\s+(\d{1,2}),?\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?$/i
+  )
+
+  if (match) {
+    const months: Record<string, string> = {
+      january: "01", february: "02", march: "03", april: "04",
+      may: "05", june: "06", july: "07", august: "08",
+      september: "09", october: "10", november: "11", december: "12",
+    }
+    const monthNum = months[match[1].toLowerCase()] ?? "01"
+    const day = match[2].padStart(2, "0")
+    const year = match[3]
+    let hour = parseInt(match[4], 10)
+    const min = match[5]
+    const ampm = (match[6] ?? "").toUpperCase()
+
+    if (ampm === "PM" && hour < 12) hour += 12
+    if (ampm === "AM" && hour === 12) hour = 0
+
+    return `${year}-${monthNum}-${day}T${String(hour).padStart(2, "0")}:${min}:00`
+  }
+
+  // Fallback: try native Date parsing, strip to local format
   const parsed = new Date(dateStr)
   if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString()
+    const y = parsed.getFullYear()
+    const m = String(parsed.getMonth() + 1).padStart(2, "0")
+    const d = String(parsed.getDate()).padStart(2, "0")
+    const h = String(parsed.getHours()).padStart(2, "0")
+    const min = String(parsed.getMinutes()).padStart(2, "0")
+    return `${y}-${m}-${d}T${h}:${min}:00`
   }
-  // Return original if we can't parse
+
   return dateStr
 }
 
