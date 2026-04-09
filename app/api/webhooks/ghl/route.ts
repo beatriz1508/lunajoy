@@ -13,6 +13,9 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
+    lastPayload = body
+    lastTimestamp = new Date().toISOString()
+    lastError = null
     console.log("GHL webhook received:", JSON.stringify(body).slice(0, 1000))
 
     // Extract appointment data — flexible: supports nested or flat payload
@@ -67,12 +70,23 @@ export async function POST(req: NextRequest) {
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
+    lastError = message
     console.error("GHL webhook error:", message)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
-// Also handle GET for testing connectivity
+// Store last webhook payload for debugging
+let lastPayload: unknown = null
+let lastError: string | null = null
+let lastTimestamp: string | null = null
+
+// GET: show last received payload (for debugging)
 export async function GET() {
-  return NextResponse.json({ status: "ok", message: "GHL webhook endpoint is active" })
+  return NextResponse.json({
+    status: "ok",
+    lastTimestamp,
+    lastError,
+    lastPayload,
+  })
 }
