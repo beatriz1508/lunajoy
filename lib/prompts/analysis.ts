@@ -41,18 +41,51 @@ ${transcript}`
 /**
  * Extract the follow-up email draft section from an analysis result.
  * Returns { subject, body } or null if not found.
+ *
+ * Parsing strategy (intentionally not a single regex — JS regex has no \Z
+ * anchor, so using \Z in a lookahead silently becomes a literal "Z" and
+ * truncates the email at the first letter Z):
+ *   1. Locate the "## Follow-Up Email Draft" header
+ *   2. Take everything after it, up to the next "## " header, "---", or EOS
+ *   3. Split by lines and pull out the Subject line
  */
 export function extractEmailDraft(analysisText: string): { subject: string; body: string } | null {
-  const emailMatch = analysisText.match(/## Follow-Up Email Draft\s*\n([\s\S]*?)(?=\n##|\n---|\Z)/i)
-  if (!emailMatch) return null
+  const headerRegex = /##\s*Follow-Up Email Draft\s*\n/i
+  const headerMatch = analysisText.match(headerRegex)
+  if (!headerMatch || headerMatch.index === undefined) return null
 
-  const emailContent = emailMatch[1].trim()
-  const subjectMatch = emailContent.match(/Subject:\s*(.+)/i)
-  const subject = subjectMatch ? subjectMatch[1].trim() : "Follow-up"
-  const body = emailContent
-    .replace(/Subject:\s*.+\n?/i, "")
-    .trim()
+  const afterHeader = analysisText.slice(headerMatch.index + headerMatch[0].length)
 
+  // Cut at next section header or "---" separator; otherwise take to EOS
+  const endMatch = afterHeader.match(/\n##\s|\n---/)
+  const emailContent = (endMatch ? afterHeader.slice(0, endMatch.index) : afterHeader).trim()
+  if (!emailContent) return null
+
+  // Pull out the Subject line. Handles markdown formatting from the model:
+  //   "Subject: Foo"
+  //   "**Subject:** Foo"
+  //   "**Subject: Foo**"
+  //   "Subject: **Foo**"
+  const lines = emailContent.split("\n")
+  let subject = "Follow-up"
+  let bodyStartIdx = 0
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*\**\s*Subject:\s*\**\s*(.+?)\s*\**\s*$/i)
+    if (m) {
+      subject = m[1].replace(/^\**\s*|\s*\**$/g, "").trim()
+      bodyStartIdx = i + 1
+      // Skip blank lines (and leftover markdown markers) immediately after the subject
+      while (
+        bodyStartIdx < lines.length &&
+        (lines[bodyStartIdx].trim() === "" || /^\*+$/.test(lines[bodyStartIdx].trim()))
+      ) {
+        bodyStartIdx++
+      }
+      break
+    }
+  }
+
+  const body = lines.slice(bodyStartIdx).join("\n").trim()
   if (!body) return null
   return { subject, body }
 }
