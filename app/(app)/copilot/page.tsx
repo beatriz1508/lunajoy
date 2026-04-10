@@ -22,10 +22,10 @@ import {
 import { Button } from "@/components/ui/button"
 
 const SUGGESTIONS = [
-  { icon: CalendarDays, text: "Quais sao as proximas reunioes da semana?" },
-  { icon: Search, text: "Busca na knowledge base sobre objecoes de preco" },
-  { icon: FileText, text: "Me ajuda a preparar para uma reuniao com um prospect de healthcare" },
-  { icon: Lightbulb, text: "Quais foram as minhas ultimas analises?" },
+  { icon: CalendarDays, text: "What meetings do I have this week?" },
+  { icon: Search, text: "Search the knowledge base for price objections" },
+  { icon: FileText, text: "Help me prep for a call with a healthcare prospect" },
+  { icon: Lightbulb, text: "What were my most recent analyses?" },
 ]
 
 const TOOL_LABELS: Record<string, { label: string; iconName: string }> = {
@@ -142,7 +142,7 @@ export default function CopilotPage() {
 
   const handleTranscriptSubmit = () => {
     if (!transcriptAttachment.trim()) return
-    const msg = `Analisa esse transcript de reuniao:\n\n${transcriptAttachment}`
+    const msg = `Analyze this meeting transcript:\n\n${transcriptAttachment}`
     setTranscriptAttachment("")
     setShowTranscriptInput(false)
     handleSend(msg)
