@@ -43,6 +43,25 @@ export async function POST(req: Request) {
 
     runId = run?.id
 
+    // 1b. Persist transcript team-wide (idempotent by calendar_event_id)
+    // Any authenticated team member can then read it on /meetings without
+    // needing personal Drive access to the organizer's transcript Doc.
+    await supabase
+      .from("meeting_transcripts")
+      .upsert(
+        {
+          calendar_event_id: body.calendarEventId ?? null,
+          meeting_title: meetingTitle ?? "Untitled Meeting",
+          meeting_date: meetingDate ?? null,
+          attendees: attendees ?? [],
+          transcript,
+          recording_url: body.recordingUrl ?? null,
+          transcript_doc_url: body.transcriptDocUrl ?? null,
+          source: "n8n",
+        },
+        { onConflict: "calendar_event_id", ignoreDuplicates: false }
+      )
+
     // 2. Fetch knowledge base for context
     const { data: knowledgeEntries } = await supabase
       .from("knowledge_entries")

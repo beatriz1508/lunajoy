@@ -7,7 +7,6 @@ import {
   CalendarDays,
   Video,
   FileText,
-  Search,
   Loader2,
   ChevronRight,
   X,
@@ -18,6 +17,7 @@ import {
   Clock,
   Users,
   Zap,
+  Sparkles,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -37,13 +37,12 @@ interface CalendarEvent {
   status: string
 }
 
-interface TranscriptFile {
+interface StoredMeetingTranscript {
   id: string
-  name: string
-  createdTime: string
-  webViewLink: string
-  mimeType: string
-  score?: number
+  transcript: string
+  recording_url: string | null
+  transcript_doc_url: string | null
+  created_at: string
 }
 
 function formatDate(dateStr: string) {
@@ -97,26 +96,15 @@ export default function MeetingsPage() {
   const [filter, setFilter] = useState<"all" | "past" | "upcoming">("all")
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
   const [transcript, setTranscript] = useState("")
-  const [transcriptFiles, setTranscriptFiles] = useState<TranscriptFile[]>([])
-  const [searchingTranscript, setSearchingTranscript] = useState(false)
+  const [storedMeeting, setStoredMeeting] = useState<StoredMeetingTranscript | null>(null)
+  const [loadingTranscript, setLoadingTranscript] = useState(false)
   const [knowledgeContext, setKnowledgeContext] = useState("")
   const [sections, setSections] = useState<Record<string, string> | null>(null)
   const [saved, setSaved] = useState(false)
   const [emailDraft, setEmailDraft] = useState("")
-  const [providerToken, setProviderToken] = useState<string | null>(null)
 
   useEffect(() => {
     getKnowledgeContext().then(setKnowledgeContext)
-  }, [])
-
-  useEffect(() => {
-    // Get provider token for Drive transcript search (still needs user OAuth)
-    const initToken = async () => {
-      const supabase = createClient()
-      const { data: { session } } = await supabase.auth.getSession()
-      setProviderToken(session?.provider_token ?? null)
-    }
-    initToken()
   }, [])
 
   useEffect(() => {
@@ -147,50 +135,28 @@ export default function MeetingsPage() {
     loadMeetings()
   }, [])
 
-  const findTranscript = useCallback(async (event: CalendarEvent) => {
-    if (!providerToken) return
-    setSearchingTranscript(true)
-    setTranscriptFiles([])
-    setTranscript("")
-
-    const dateStr = event.start.dateTime ?? event.start.date ?? ""
-    const title = event.summary ?? ""
-
+  const loadStoredTranscript = useCallback(async (event: CalendarEvent) => {
+    setLoadingTranscript(true)
     try {
-      const res = await fetch(
-        `/api/meetings/transcript?title=${encodeURIComponent(title)}&date=${encodeURIComponent(dateStr)}`,
-        { headers: { Authorization: `Bearer ${providerToken}` } }
-      )
-      const data = await res.json()
-      setTranscriptFiles(data.files ?? [])
-      if (!data.files?.length) {
-        toast.error("No transcript found for this meeting.")
+      const supabase = createClient()
+      const { data } = await supabase
+        .from("meeting_transcripts")
+        .select("id, transcript, recording_url, transcript_doc_url, created_at")
+        .eq("calendar_event_id", event.id)
+        .maybeSingle()
+
+      if (data) {
+        setStoredMeeting(data as StoredMeetingTranscript)
+        setTranscript(data.transcript ?? "")
+      } else {
+        setStoredMeeting(null)
       }
     } catch {
-      toast.error("Failed to search for transcript.")
+      setStoredMeeting(null)
     } finally {
-      setSearchingTranscript(false)
+      setLoadingTranscript(false)
     }
-  }, [providerToken])
-
-  const loadTranscriptContent = async (file: TranscriptFile) => {
-    if (!providerToken) return
-    setSearchingTranscript(true)
-    try {
-      const res = await fetch(
-        `/api/meetings/transcript?fileId=${file.id}`,
-        { headers: { Authorization: `Bearer ${providerToken}` } }
-      )
-      const data = await res.json()
-      setTranscript(data.transcript ?? "")
-      setTranscriptFiles([])
-      toast.success("Transcript loaded!")
-    } catch {
-      toast.error("Failed to load transcript content.")
-    } finally {
-      setSearchingTranscript(false)
-    }
-  }
+  }, [])
 
   const { complete, completion, isLoading: analyzing } = useCompletion({
     api: "/api/analyze",
@@ -235,9 +201,10 @@ export default function MeetingsPage() {
   const openEvent = (event: CalendarEvent) => {
     setSelectedEvent(event)
     setTranscript("")
-    setTranscriptFiles([])
+    setStoredMeeting(null)
     setSections(null)
     setSaved(false)
+    void loadStoredTranscript(event)
   }
 
   return (
@@ -420,87 +387,96 @@ export default function MeetingsPage() {
           )}
 
           {/* Step 1: Find transcript */}
-          {!transcript && (
+          {/* Auto-captured transcript info card (team-shared via n8n) */}
+          {storedMeeting && transcript && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  <Sparkles className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-emerald-800">
+                      Auto-captured transcript
+                    </p>
+                    <p className="text-xs text-emerald-700 mt-0.5">
+                      Shared with the team · added {formatDate(storedMeeting.created_at)} ·{" "}
+                      {storedMeeting.transcript.length.toLocaleString()} characters
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {(storedMeeting.recording_url || storedMeeting.transcript_doc_url) && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {storedMeeting.recording_url && (
+                    <a
+                      href={storedMeeting.recording_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-emerald-300 text-emerald-700 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors"
+                    >
+                      <Video className="w-3.5 h-3.5" />
+                      Watch Recording
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                  {storedMeeting.transcript_doc_url && (
+                    <a
+                      href={storedMeeting.transcript_doc_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-emerald-300 text-emerald-700 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      Open original Doc
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {/* Inline transcript viewer */}
+              <details className="mt-3 group">
+                <summary className="cursor-pointer text-xs font-medium text-emerald-700 hover:text-emerald-900 select-none">
+                  Show full transcript
+                </summary>
+                <div className="mt-2 bg-white border border-emerald-200 rounded-lg p-3 max-h-96 overflow-y-auto">
+                  <pre className="text-xs text-slate-700 whitespace-pre-wrap font-sans leading-relaxed">
+                    {storedMeeting.transcript}
+                  </pre>
+                </div>
+              </details>
+            </div>
+          )}
+
+          {/* Loading indicator while fetching stored transcript */}
+          {loadingTranscript && !transcript && (
+            <div className="bg-white border border-slate-200 rounded-xl p-5 mb-4 flex items-center gap-2 text-sm text-slate-500">
+              <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+              Looking up shared transcript…
+            </div>
+          )}
+
+          {/* Manual paste fallback (only when no stored transcript) */}
+          {!loadingTranscript && !transcript && !storedMeeting && (
             <div className="bg-white border border-slate-200 rounded-xl p-5 mb-4">
               <p className="text-sm font-semibold text-slate-800 mb-1">
                 Step 1 — Load Transcript
               </p>
               <p className="text-xs text-slate-500 mb-3">
-                Search your Google Drive for the Meet transcript, or paste it manually below.
+                No auto-captured transcript found for this meeting yet. Paste one manually to
+                analyze it — it will stay local to your session.
               </p>
-
-              {isPast(selectedEvent.start.dateTime ?? selectedEvent.start.date ?? "") && (
-                <Button
-                  onClick={() => findTranscript(selectedEvent)}
-                  disabled={searchingTranscript}
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5 mb-3"
-                >
-                  {searchingTranscript ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Search className="w-3.5 h-3.5" />
-                  )}
-                  Search Drive for Transcript
-                </Button>
-              )}
-
-              {/* Transcript file results */}
-              {transcriptFiles.length > 0 && (
-                <div className="space-y-2 mb-3">
-                  <p className="text-xs font-medium text-slate-600">
-                    Found {transcriptFiles.length} file{transcriptFiles.length !== 1 ? "s" : ""}:
-                  </p>
-                  {transcriptFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      className="flex items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <FileText className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                        <span className="text-xs text-blue-700 truncate">{file.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <a
-                          href={file.webViewLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-1 rounded hover:bg-blue-100 text-blue-400"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                        <Button
-                          size="sm"
-                          onClick={() => loadTranscriptContent(file)}
-                          disabled={searchingTranscript}
-                          className="text-xs h-7 px-2 bg-blue-600 hover:bg-blue-700"
-                        >
-                          Use This
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Manual paste */}
-              <div>
-                <p className="text-xs text-slate-500 mb-1.5">
-                  Or paste the transcript manually:
-                </p>
-                <textarea
-                  className="w-full min-h-[140px] text-sm border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200 placeholder:text-slate-300"
-                  placeholder="Paste your Google Meet transcript here…"
-                  value={transcript}
-                  onChange={(e) => setTranscript(e.target.value)}
-                />
-              </div>
+              <textarea
+                className="w-full min-h-[140px] text-sm border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200 placeholder:text-slate-300"
+                placeholder="Paste your Google Meet transcript here…"
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+              />
             </div>
           )}
 
-          {/* Transcript loaded */}
-          {transcript && !sections && (
+          {/* Transcript loaded (manual paste only — stored card shows its own info) */}
+          {transcript && !storedMeeting && !sections && (
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

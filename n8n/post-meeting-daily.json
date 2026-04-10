@@ -1,0 +1,378 @@
+{
+  "name": "LunaJoy - Post-Meeting Auto Analysis (Daily)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 23,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000001",
+      "name": "Every Night 23:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "REPLACE_WITH_CALENDAR_ID",
+          "mode": "list",
+          "cachedResultName": "LunaJoy Shared Calendar"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ new Date(Date.now() - 36*60*60*1000).toISOString() }}",
+          "timeMax": "={{ new Date().toISOString() }}",
+          "singleEvents": true,
+          "orderBy": "startTime"
+        }
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000002",
+      "name": "Get Yesterday's Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [440, 300],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Calendar (LunaJoy)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.hangoutLink }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "cond-2",
+              "leftValue": "={{ ($json.attachments || []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "cond-3",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "cancelled",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000003",
+      "name": "Has Meet + Attachments",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Extract transcript + recording from the Calendar event's attachments.\n//\n// Google Meet attaches a single Google Doc titled \"Notes by Gemini\" that\n// contains BOTH the AI summary AND the verbatim transcript inline. We also\n// accept Docs titled \"Transcript\" as a fallback for older meetings.\nconst event = $json;\nconst attachments = event.attachments || [];\n\nconst isGoogleDoc = (a) => a && a.mimeType === 'application/vnd.google-apps.document';\n\n// Prefer explicit Transcript doc; fall back to Notes by Gemini; finally any Doc.\nconst transcriptAtt =\n  attachments.find(a => isGoogleDoc(a) && /transcript/i.test(a.title || '')) ||\n  attachments.find(a => isGoogleDoc(a) && /notes by gemini|gemini notes/i.test(a.title || '')) ||\n  attachments.find(a => isGoogleDoc(a));\n\n// Recording = video file OR attachment whose title contains 'Recording'\nconst recordingAtt = attachments.find(a =>\n  (a.mimeType && a.mimeType.startsWith('video/')) ||\n  /recording/i.test(a.title || '')\n);\n\n// If no Google Doc attached at all, mark this item to be skipped downstream\nif (!transcriptAtt) {\n  return {\n    skip: true,\n    calendarEventId: event.id,\n    meetingTitle: event.summary || 'Untitled Meeting',\n    reason: 'no transcript/notes doc attached',\n    attachmentTitles: attachments.map(a => a.title || '(untitled)')\n  };\n}\n\nreturn {\n  skip: false,\n  calendarEventId: event.id,\n  meetingTitle: event.summary || 'Untitled Meeting',\n  meetingDate: event.start?.dateTime || event.start?.date || null,\n  attendees: (event.attendees || [])\n    .filter(a => a && a.email && !a.self)\n    .map(a => a.email),\n  transcriptFileId: transcriptAtt.fileId,\n  transcriptDocUrl: transcriptAtt.fileUrl,\n  transcriptSourceTitle: transcriptAtt.title || null,\n  recordingUrl: recordingAtt ? recordingAtt.fileUrl : null\n};\n"
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000004",
+      "name": "Extract Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "skip-filter",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000005",
+      "name": "Has Transcript?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.transcriptFileId }}",
+          "mode": "id"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "text/plain"
+            }
+          }
+        }
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000006",
+      "name": "Download Transcript Doc",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1400, 300],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Google Drive (LunaJoy)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "data",
+        "destinationKey": "transcriptText",
+        "options": {}
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000007",
+      "name": "Binary to Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [1640, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "meetingTitle",
+              "value": "={{ $('Extract Attachments').item.json.meetingTitle }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "meetingDate",
+              "value": "={{ $('Extract Attachments').item.json.meetingDate }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "calendarEventId",
+              "value": "={{ $('Extract Attachments').item.json.calendarEventId }}",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "attendees",
+              "value": "={{ $('Extract Attachments').item.json.attendees }}",
+              "type": "array"
+            },
+            {
+              "id": "a5",
+              "name": "transcript",
+              "value": "={{ $json.transcriptText }}",
+              "type": "string"
+            },
+            {
+              "id": "a6",
+              "name": "recordingUrl",
+              "value": "={{ $('Extract Attachments').item.json.recordingUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "a7",
+              "name": "transcriptDocUrl",
+              "value": "={{ $('Extract Attachments').item.json.transcriptDocUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "a8",
+              "name": "userId",
+              "value": "REPLACE_WITH_SUPABASE_USER_UUID",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000008",
+      "name": "Build Webhook Body",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1880, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://lunajoy.vercel.app/api/webhooks/n8n/post-meeting",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "id": "d3f1a0e0-0000-4000-8000-000000000009",
+      "name": "POST to Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2120, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "LunaJoy Webhook x-api-key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Night 23:00": {
+      "main": [
+        [
+          {
+            "node": "Get Yesterday's Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Yesterday's Events": {
+      "main": [
+        [
+          {
+            "node": "Has Meet + Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Meet + Attachments": {
+      "main": [
+        [
+          {
+            "node": "Extract Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Attachments": {
+      "main": [
+        [
+          {
+            "node": "Has Transcript?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Transcript?": {
+      "main": [
+        [
+          {
+            "node": "Download Transcript Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Transcript Doc": {
+      "main": [
+        [
+          {
+            "node": "Binary to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binary to Text": {
+      "main": [
+        [
+          {
+            "node": "Build Webhook Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Webhook Body": {
+      "main": [
+        [
+          {
+            "node": "POST to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
