@@ -244,6 +244,51 @@ export function createAgentTools(): ToolSet {
     }),
 
     /**
+     * Draft a follow-up email for rep approval before sending.
+     */
+    draftEmail: tool({
+      description:
+        "Save a follow-up email draft for the sales rep to review and approve before sending. " +
+        "Use this when you generate a follow-up email from a meeting analysis or when the user asks you to draft an email. " +
+        "The email will NOT be sent immediately — it goes to the Emails page for approval.",
+      inputSchema: z.object({
+        toEmail: z.string().describe("Recipient email address"),
+        toName: z.string().optional().describe("Recipient name"),
+        subject: z.string().describe("Email subject line"),
+        body: z.string().describe("Email body text (plain text)"),
+        meetingTitle: z.string().optional().describe("Related meeting title for context"),
+      }),
+      execute: async ({ toEmail, toName, subject, body, meetingTitle }) => {
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return { success: false, error: "Not authenticated" }
+
+        const { data, error } = await supabase
+          .from("pending_emails")
+          .insert({
+            user_id: user.id,
+            to_email: toEmail,
+            to_name: toName ?? null,
+            subject,
+            body_html: body,
+            body_text: body,
+            meeting_title: meetingTitle ?? null,
+            source: "agent",
+            status: "pending",
+          })
+          .select()
+          .single()
+
+        if (error) return { success: false, error: error.message }
+        return {
+          success: true,
+          id: data.id,
+          message: `Email draft saved for approval. The rep can review and send it from the Emails page.`,
+        }
+      },
+    }),
+
+    /**
      * Generate a meeting prep/brainstorm for an upcoming prospect meeting.
      */
     prepMeeting: tool({

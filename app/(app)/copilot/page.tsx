@@ -17,6 +17,7 @@ import {
   Lightbulb,
   Sparkles,
   Paperclip,
+  Mail,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
@@ -34,6 +35,7 @@ const TOOL_LABELS: Record<string, { label: string; iconName: string }> = {
   searchHistory: { label: "Searching history", iconName: "Search" },
   saveInsight: { label: "Saving insight", iconName: "Lightbulb" },
   analyzeTranscript: { label: "Analyzing transcript", iconName: "FileText" },
+  draftEmail: { label: "Drafting email for approval", iconName: "Mail" },
   prepMeeting: { label: "Preparing meeting brief", iconName: "Sparkles" },
 }
 
@@ -45,6 +47,7 @@ function getToolIcon(iconName: string) {
     Lightbulb: <Lightbulb className="w-3.5 h-3.5" />,
     FileText: <FileText className="w-3.5 h-3.5" />,
     Sparkles: <Sparkles className="w-3.5 h-3.5" />,
+    Mail: <Mail className="w-3.5 h-3.5" />,
   }
   return icons[iconName] ?? <Wrench className="w-3.5 h-3.5" />
 }
