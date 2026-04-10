@@ -1,89 +1,100 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
-import { useCompletion } from "@ai-sdk/react"
+import { useChat } from "@ai-sdk/react"
+import { DefaultChatTransport } from "ai"
+import { useState, useRef, useEffect } from "react"
 import { toast } from "sonner"
 import {
-  Mic2,
   Send,
-  Save,
-  Copy,
   Loader2,
-  CheckCircle2,
-  AlertCircle,
-  ChevronDown,
-  ChevronUp,
+  Bot,
+  User,
+  Wrench,
+  CalendarDays,
+  Search,
+  BookOpen,
+  FileText,
+  Lightbulb,
+  Sparkles,
+  Paperclip,
+  Mail,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { Skeleton } from "@/components/ui/skeleton"
-import { getKnowledgeContext } from "@/lib/db/knowledge"
-import { saveHistoryEntry } from "@/lib/db/history"
 
-interface AnalysisSection {
-  id: string
-  title: string
-  content: string
-  color: string
-  icon: React.ReactNode
+const SUGGESTIONS = [
+  { icon: CalendarDays, text: "Quais sao as proximas reunioes da semana?" },
+  { icon: Search, text: "Busca na knowledge base sobre objecoes de preco" },
+  { icon: FileText, text: "Me ajuda a preparar para uma reuniao com um prospect de healthcare" },
+  { icon: Lightbulb, text: "Quais foram as minhas ultimas analises?" },
+]
+
+const TOOL_LABELS: Record<string, { label: string; iconName: string }> = {
+  searchKnowledge: { label: "Searching knowledge base", iconName: "BookOpen" },
+  listMeetings: { label: "Listing meetings", iconName: "CalendarDays" },
+  createMeeting: { label: "Creating meeting", iconName: "CalendarDays" },
+  searchHistory: { label: "Searching history", iconName: "Search" },
+  saveInsight: { label: "Saving insight", iconName: "Lightbulb" },
+  analyzeTranscript: { label: "Analyzing transcript", iconName: "FileText" },
+  draftEmail: { label: "Drafting email for approval", iconName: "Mail" },
+  prepMeeting: { label: "Preparing meeting brief", iconName: "Sparkles" },
 }
 
-function parseAnalysis(text: string): Record<string, string> {
-  const sections: Record<string, string> = {}
-  const markers = [
-    { key: "summary", pattern: /##\s*Executive Summary/i },
-    { key: "objections", pattern: /##\s*Key Objections/i },
-    { key: "handling", pattern: /##\s*Objection Handling/i },
-    { key: "followup", pattern: /##\s*Follow-Up Actions/i },
-    { key: "email", pattern: /##\s*(Follow-Up Email|Email Draft)/i },
-  ]
-
-  const markerPositions: { key: string; index: number }[] = []
-  for (const m of markers) {
-    const match = m.pattern.exec(text)
-    if (match) markerPositions.push({ key: m.key, index: match.index })
+function getToolIcon(iconName: string) {
+  const icons: Record<string, React.ReactNode> = {
+    BookOpen: <BookOpen className="w-3.5 h-3.5" />,
+    CalendarDays: <CalendarDays className="w-3.5 h-3.5" />,
+    Search: <Search className="w-3.5 h-3.5" />,
+    Lightbulb: <Lightbulb className="w-3.5 h-3.5" />,
+    FileText: <FileText className="w-3.5 h-3.5" />,
+    Sparkles: <Sparkles className="w-3.5 h-3.5" />,
+    Mail: <Mail className="w-3.5 h-3.5" />,
   }
-  markerPositions.sort((a, b) => a.index - b.index)
+  return icons[iconName] ?? <Wrench className="w-3.5 h-3.5" />
+}
 
-  for (let i = 0; i < markerPositions.length; i++) {
-    const start = markerPositions[i].index
-    const end =
-      i + 1 < markerPositions.length ? markerPositions[i + 1].index : text.length
-    const slice = text.slice(start, end)
-    const content = slice.replace(/^##\s*[^\n]+\n/, "").trim()
-    sections[markerPositions[i].key] = content
-  }
+function ToolCallIndicator({ toolName, state }: { toolName: string; state: string }) {
+  const info = TOOL_LABELS[toolName] ?? { label: toolName, iconName: "Wrench" }
+  const isRunning = state === "input-streaming" || state === "input-available"
 
-  return sections
+  return (
+    <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 my-1">
+      {isRunning ? (
+        <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-500" />
+      ) : (
+        <span className="text-teal-500">{getToolIcon(info.iconName)}</span>
+      )}
+      <span>{info.label}{isRunning ? "..." : " - done"}</span>
+    </div>
+  )
 }
 
 function RenderMarkdown({ text }: { text: string }) {
   const lines = text.split("\n")
   return (
-    <div className="ai-content space-y-1">
+    <div className="space-y-1">
       {lines.map((line, i) => {
-        if (line.startsWith("## ") || line.startsWith("**") && line.endsWith("**"))
+        if (line.startsWith("## ") || (line.startsWith("**") && line.endsWith("**")))
           return (
-            <p key={i} className="font-semibold text-slate-800 text-sm mt-2 first:mt-0">
+            <p key={i} className="font-semibold text-slate-800 text-sm mt-3 first:mt-0">
               {line.replace(/^##\s*/, "").replace(/^\*\*|\*\*$/g, "")}
             </p>
           )
         if (line.startsWith("- ") || line.startsWith("* "))
           return (
             <p key={i} className="text-sm text-slate-700 pl-3 before:content-['•'] before:mr-2 before:text-slate-400">
-              {line.replace(/^[-*]\s+/, "")}
+              {line.replace(/^[-*]\s+/, "").replace(/\*\*([^*]+)\*\*/g, "$1")}
             </p>
           )
         if (line.match(/^\d+\.\s/))
           return (
             <p key={i} className="text-sm text-slate-700 pl-3">
-              {line}
+              {line.replace(/\*\*([^*]+)\*\*/g, "$1")}
             </p>
           )
         if (line.startsWith("- [ ]") || line.startsWith("- [x]"))
           return (
             <p key={i} className="text-sm text-slate-700 pl-3 flex items-start gap-2">
-              <span className="mt-0.5 text-slate-400">☐</span>
+              <span className="mt-0.5 text-slate-400">{line.includes("[x]") ? "✅" : "☐"}</span>
               {line.replace(/^-\s\[[ x]\]\s*/, "")}
             </p>
           )
@@ -98,321 +109,238 @@ function RenderMarkdown({ text }: { text: string }) {
   )
 }
 
-function SectionCard({
-  title,
-  content,
-  colorClass,
-  editable = false,
-  editValue,
-  onEdit,
-}: {
-  title: string
-  content: string
-  colorClass: string
-  editable?: boolean
-  editValue?: string
-  onEdit?: (v: string) => void
-}) {
-  const [open, setOpen] = useState(true)
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(editValue ?? content)
-    toast.success("Copied to clipboard!")
-  }
-
-  return (
-    <div className={`bg-white border rounded-xl overflow-hidden ${colorClass}`}>
-      <div
-        className="flex items-center justify-between px-5 py-3.5 cursor-pointer hover:bg-slate-50"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <h3 className="font-semibold text-slate-800 text-sm">{title}</h3>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              handleCopy()
-            }}
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600"
-          >
-            <Copy className="w-3.5 h-3.5" />
-          </button>
-          {open ? (
-            <ChevronUp className="w-4 h-4 text-slate-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          )}
-        </div>
-      </div>
-      {open && (
-        <div className="px-5 pb-4 border-t border-slate-100">
-          {editable && onEdit ? (
-            <textarea
-              className="w-full mt-3 text-sm text-slate-700 border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-purple-300 min-h-[120px]"
-              value={editValue}
-              onChange={(e) => onEdit(e.target.value)}
-            />
-          ) : (
-            <div className="mt-3">
-              <RenderMarkdown text={content} />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
+// Transport configured to hit our agent API
+const transport = new DefaultChatTransport({ api: "/api/agent" })
 
 export default function CopilotPage() {
-  const [transcript, setTranscript] = useState("")
-  const [knowledgeContext, setKnowledgeContext] = useState("")
-  const [sections, setSections] = useState<Record<string, string> | null>(null)
-  const [emailDraft, setEmailDraft] = useState("")
-  const [saved, setSaved] = useState(false)
-  const [debugInfo, setDebugInfo] = useState("")
-  const prevCompletionRef = useRef("")
+  const [inputValue, setInputValue] = useState("")
+  const [transcriptAttachment, setTranscriptAttachment] = useState("")
+  const [showTranscriptInput, setShowTranscriptInput] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  useEffect(() => {
-    getKnowledgeContext().then(setKnowledgeContext)
-  }, [])
-
-  const { complete, completion, isLoading } = useCompletion({
-    api: "/api/analyze",
-    streamProtocol: "text",
-    onFinish: (_prompt, result) => {
-      setDebugInfo(`onFinish called. result length: ${result?.length ?? "null"}. first 300 chars: ${result?.slice(0, 300) ?? "EMPTY"}`)
-      const parsed = parseAnalysis(result)
-      setSections(parsed)
-      setEmailDraft(parsed.email ?? "")
-    },
-    onError: (err) => {
-      setDebugInfo(`onError: ${err?.message ?? String(err)}`)
-      toast.error("Analysis failed. Check your API key.")
+  const { messages, sendMessage, status } = useChat({
+    transport,
+    onError: () => {
+      toast.error("Something went wrong. Please try again.")
     },
   })
 
-  const handleAnalyze = async () => {
-    if (!transcript.trim()) {
-      toast.error("Please paste a meeting transcript first.")
-      return
-    }
-    setSections(null)
-    setSaved(false)
-    prevCompletionRef.current = ""
-    await complete("", {
-      body: { transcript, knowledgeBase: knowledgeContext },
-    })
+  const isLoading = status === "submitted" || status === "streaming"
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
+
+  const handleSend = (text?: string) => {
+    const msg = text ?? inputValue.trim()
+    if (!msg || isLoading) return
+    sendMessage({ text: msg })
+    setInputValue("")
   }
 
-  const saveAnalysis = async () => {
-    if (!sections) return
-    await saveHistoryEntry({
-      type: "copilot",
-      title: `Meeting Analysis — ${new Date().toLocaleDateString()}`,
-      summary: sections.summary?.slice(0, 200) ?? "",
-      full_content: completion,
-    })
-    setSaved(true)
-    toast.success("Analysis saved to history!")
+  const handleTranscriptSubmit = () => {
+    if (!transcriptAttachment.trim()) return
+    const msg = `Analisa esse transcript de reuniao:\n\n${transcriptAttachment}`
+    setTranscriptAttachment("")
+    setShowTranscriptInput(false)
+    handleSend(msg)
   }
 
-  const sectionDefs = [
-    { key: "summary", title: "Executive Summary", color: "border-teal-200" },
-    { key: "objections", title: "Key Objections Raised", color: "border-red-200" },
-    { key: "handling", title: "Objection Handling", color: "border-amber-200" },
-    { key: "followup", title: "Recommended Follow-Up Actions", color: "border-blue-200" },
-  ]
+  const hasMessages = messages.length > 0
 
   return (
-    <div>
+    <div className="flex flex-col h-[calc(100vh-4rem)] md:h-[calc(100vh-2rem)]">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex items-center gap-3 mb-4 flex-shrink-0">
         <div className="w-9 h-9 rounded-xl bg-teal-100 flex items-center justify-center">
-          <Mic2 className="w-5 h-5 text-teal-600" />
+          <Sparkles className="w-5 h-5 text-teal-600" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Meeting Copilot</h1>
+          <h1 className="text-xl font-bold text-slate-900">Luna AI Agent</h1>
           <p className="text-sm text-slate-500">
-            Paste a transcript and get instant consultant-level analysis.
+            Your sales AI assistant — ask anything, I'll use my tools to help.
           </p>
         </div>
       </div>
 
-      <div className="mt-6 space-y-4">
-        {/* Transcript input */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <label className="text-sm font-medium text-slate-700 block mb-2">
-            Meeting Transcript
-          </label>
-          <Textarea
-            placeholder="Paste your meeting transcript here — call notes, Zoom transcript, or any text format works..."
-            className="min-h-[200px] resize-none text-sm"
-            value={transcript}
-            onChange={(e) => setTranscript(e.target.value)}
-            disabled={isLoading}
-          />
-          <div className="flex items-center justify-between mt-3">
-            <p className="text-xs text-slate-400">
-              {transcript.length > 0 ? `${transcript.length} characters` : ""}
-            </p>
-            <div className="flex gap-2">
-              {sections && !saved && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void saveAnalysis()}
-                  className="gap-1.5"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  Save
-                </Button>
-              )}
-              {saved && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled
-                  className="gap-1.5 text-green-600 border-green-200"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  Saved
-                </Button>
-              )}
-              <Button
-                onClick={handleAnalyze}
-                disabled={isLoading || !transcript.trim()}
-                className="gap-1.5 bg-teal-600 hover:bg-teal-700"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Analyzing…
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    Analyze
-                  </>
-                )}
-              </Button>
+      {/* Chat Messages */}
+      <div className="flex-1 overflow-y-auto min-h-0 space-y-4 pb-4">
+        {/* Welcome state */}
+        {!hasMessages && (
+          <div className="flex flex-col items-center justify-center h-full">
+            <div className="w-16 h-16 rounded-2xl bg-teal-100 flex items-center justify-center mb-4">
+              <Bot className="w-8 h-8 text-teal-600" />
             </div>
+            <h2 className="text-lg font-semibold text-slate-800 mb-1">
+              Hey! I'm Luna, your sales AI.
+            </h2>
+            <p className="text-sm text-slate-500 mb-6 text-center max-w-md">
+              I can analyze meetings, search your knowledge base, prep for calls,
+              check your calendar, and more. Just ask!
+            </p>
+
+            {/* Suggestion cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-lg">
+              {SUGGESTIONS.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSend(s.text)}
+                  className="flex items-start gap-3 text-left bg-white border border-slate-200 rounded-xl p-3 hover:border-teal-300 hover:bg-teal-50/50 transition-all"
+                >
+                  <s.icon className="w-4 h-4 text-teal-500 mt-0.5 flex-shrink-0" />
+                  <span className="text-sm text-slate-700">{s.text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Messages */}
+        {messages.map((message) => (
+          <div key={message.id}>
+            {message.role === "user" ? (
+              <div className="flex gap-3 justify-end">
+                <div className="bg-teal-600 text-white rounded-2xl rounded-br-md px-4 py-2.5 max-w-[80%]">
+                  {message.parts.map((part, i) => {
+                    if (part.type === "text") {
+                      return <p key={i} className="text-sm whitespace-pre-wrap">{part.text}</p>
+                    }
+                    return null
+                  })}
+                </div>
+                <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center flex-shrink-0">
+                  <User className="w-4 h-4 text-slate-600" />
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center flex-shrink-0">
+                  <Bot className="w-4 h-4 text-teal-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  {message.parts.map((part, i) => {
+                    // Dynamic tool calls (server-defined tools)
+                    if (part.type === "dynamic-tool") {
+                      return (
+                        <ToolCallIndicator
+                          key={i}
+                          toolName={part.toolName}
+                          state={part.state}
+                        />
+                      )
+                    }
+                    // Text content
+                    if (part.type === "text" && part.text) {
+                      return (
+                        <div key={i} className="bg-white border border-slate-200 rounded-2xl rounded-bl-md px-4 py-3 max-w-[90%]">
+                          <RenderMarkdown text={part.text} />
+                        </div>
+                      )
+                    }
+                    return null
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Loading indicator */}
+        {status === "submitted" && (
+          <div className="flex gap-3">
+            <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center flex-shrink-0">
+              <Bot className="w-4 h-4 text-teal-600" />
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-md px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
+                <span className="text-sm text-slate-500">Thinking...</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Transcript attachment */}
+      {showTranscriptInput && (
+        <div className="flex-shrink-0 bg-white border border-slate-200 rounded-xl p-4 mb-2">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium text-slate-700">Attach Meeting Transcript</p>
+            <button
+              onClick={() => setShowTranscriptInput(false)}
+              className="text-xs text-slate-400 hover:text-slate-600"
+            >
+              Cancel
+            </button>
+          </div>
+          <textarea
+            className="w-full min-h-[120px] text-sm border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-teal-200"
+            placeholder="Paste your meeting transcript here..."
+            value={transcriptAttachment}
+            onChange={(e) => setTranscriptAttachment(e.target.value)}
+          />
+          <div className="flex justify-end mt-2">
+            <Button
+              onClick={handleTranscriptSubmit}
+              disabled={!transcriptAttachment.trim()}
+              size="sm"
+              className="gap-1.5 bg-teal-600 hover:bg-teal-700"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Analyze Transcript
+            </Button>
           </div>
         </div>
+      )}
 
-        {/* Loading skeletons */}
-        {isLoading && !sections && (
-          <div className="space-y-3">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="bg-white border border-slate-200 rounded-xl p-5">
-                <Skeleton className="h-4 w-40 mb-3" />
-                <Skeleton className="h-3 w-full mb-2" />
-                <Skeleton className="h-3 w-4/5 mb-2" />
-                <Skeleton className="h-3 w-3/4" />
-              </div>
-            ))}
+      {/* Input area */}
+      <div className="flex-shrink-0 pt-2 border-t border-slate-200">
+        <div className="flex gap-2 items-end">
+          <button
+            type="button"
+            onClick={() => setShowTranscriptInput(!showTranscriptInput)}
+            className="p-2.5 rounded-xl border border-slate-200 text-slate-400 hover:text-teal-600 hover:border-teal-300 transition-colors flex-shrink-0"
+            title="Attach transcript"
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
+          <div className="flex-1 relative">
+            <textarea
+              ref={inputRef}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="Ask Luna anything about your sales..."
+              className="w-full text-sm border border-slate-200 rounded-xl px-4 py-3 pr-12 resize-none focus:outline-none focus:ring-2 focus:ring-teal-200 max-h-32"
+              rows={1}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSend()
+                }
+              }}
+              disabled={isLoading}
+            />
           </div>
-        )}
-
-        {/* Streaming preview */}
-        {isLoading && completion && !sections && (
-          <div className="bg-white border border-slate-200 rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Loader2 className="w-4 h-4 animate-spin text-teal-600" />
-              <span className="text-sm font-medium text-teal-700">
-                Generating analysis…
-              </span>
-            </div>
-            <div className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed font-mono text-xs max-h-48 overflow-y-auto">
-              {completion}
-            </div>
-          </div>
-        )}
-
-        {/* Results */}
-        {sections && (
-          <div className="space-y-3">
-            {sectionDefs.map((def) =>
-              sections[def.key] ? (
-                <SectionCard
-                  key={def.key}
-                  title={def.title}
-                  content={sections[def.key]}
-                  colorClass={`border-slate-200 border-l-4 ${def.color.replace("border-", "border-l-")}`}
-                />
-              ) : null
+          <Button
+            type="button"
+            onClick={() => handleSend()}
+            disabled={isLoading || !inputValue.trim()}
+            className="bg-teal-600 hover:bg-teal-700 rounded-xl px-4 h-11 flex-shrink-0"
+          >
+            {isLoading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <Send className="w-5 h-5" />
             )}
-
-            {/* Editable email draft */}
-            {(sections.email || emailDraft) && (
-              <div className="bg-white border border-slate-200 border-l-4 border-l-purple-300 rounded-xl overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
-                  <h3 className="font-semibold text-slate-800 text-sm">
-                    Follow-Up Email Draft
-                  </h3>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(emailDraft)
-                      toast.success("Email copied to clipboard!")
-                    }}
-                    className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    Copy
-                  </button>
-                </div>
-                <div className="px-5 pb-4 pt-3">
-                  <p className="text-xs text-slate-400 mb-2">
-                    Editable — customize before sending
-                  </p>
-                  <textarea
-                    className="w-full text-sm text-slate-700 border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-purple-300 min-h-[160px]"
-                    value={emailDraft}
-                    onChange={(e) => setEmailDraft(e.target.value)}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2 pt-2">
-              {!saved ? (
-                <Button
-                  onClick={() => void saveAnalysis()}
-                  className="gap-1.5 bg-purple-600 hover:bg-purple-700"
-                >
-                  <Save className="w-4 h-4" />
-                  Save Analysis
-                </Button>
-              ) : (
-                <Button
-                  disabled
-                  className="gap-1.5 bg-green-600"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  Saved to History
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Empty state */}
-        {!isLoading && !sections && !completion && (
-          <div className="bg-white border border-dashed border-slate-200 rounded-xl p-10 text-center">
-            <AlertCircle className="w-8 h-8 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm font-medium">
-              No analysis yet
-            </p>
-            <p className="text-slate-400 text-xs mt-1">
-              Paste a transcript above and click Analyze to get started.
-            </p>
-          </div>
-        )}
-        {/* Debug info — remove after fixing */}
-        {debugInfo && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
-            <p className="text-xs font-mono text-red-800 break-all whitespace-pre-wrap">{debugInfo}</p>
-          </div>
-        )}
+          </Button>
+        </div>
+        <p className="text-xs text-slate-400 text-center mt-2">
+          Luna can search your knowledge base, calendar, and history. Press Enter to send.
+        </p>
       </div>
     </div>
   )

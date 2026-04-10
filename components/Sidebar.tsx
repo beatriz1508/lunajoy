@@ -11,16 +11,21 @@ import {
   BookOpen,
   GraduationCap,
   History,
+  CalendarDays,
+  Mail,
   Menu,
   X,
   LogOut,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { Profile } from "@/lib/db/profile"
+import { NotificationBell } from "@/components/NotificationBell"
 
 const navItems = [
   { href: "/", label: "Home", icon: Home },
+  { href: "/meetings", label: "Meetings", icon: CalendarDays },
   { href: "/copilot", label: "Copilot", icon: Mic2 },
+  { href: "/emails", label: "Emails", icon: Mail },
   { href: "/brainstorm", label: "Brainstorm", icon: Lightbulb },
   { href: "/knowledge", label: "Knowledge Base", icon: BookOpen },
   { href: "/training", label: "Training", icon: GraduationCap },
@@ -152,13 +157,16 @@ export function Sidebar() {
     <>
       {/* Desktop sidebar */}
       <aside className="hidden md:flex flex-col fixed inset-y-0 left-0 w-64 border-r border-slate-200 bg-white z-30">
-        <div className="flex items-center gap-2.5 px-6 py-5 border-b border-slate-200">
-          <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center flex-shrink-0">
-            <span className="text-white text-xs font-bold">SC</span>
+        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center flex-shrink-0">
+              <span className="text-white text-xs font-bold">SC</span>
+            </div>
+            <span className="font-semibold text-slate-800 text-sm leading-tight">
+              Sales Consultant
+            </span>
           </div>
-          <span className="font-semibold text-slate-800 text-sm leading-tight">
-            Sales Consultant
-          </span>
+          <NotificationBell />
         </div>
         <NavLinks />
         <UserFooter />

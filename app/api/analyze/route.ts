@@ -1,4 +1,4 @@
-import { google } from "@ai-sdk/google"
+import { openai } from "@ai-sdk/openai"
 import { streamText } from "ai"
 
 const SYSTEM_PROMPT = `You are an expert B2B sales consultant with 15+ years experience.
@@ -7,24 +7,33 @@ but diagnose problems, challenge assumptions, and build business cases.
 Always respond in the same language the user is writing in.`
 
 export async function POST(req: Request) {
-  const { transcript, knowledgeBase } = await req.json()
+  try {
+    const { transcript, knowledgeBase } = await req.json()
 
-  if (!transcript) {
-    return new Response("Missing transcript", { status: 400 })
-  }
+    if (!transcript) {
+      return new Response("Missing transcript", { status: 400 })
+    }
 
-  const knowledgeSection =
-    knowledgeBase && knowledgeBase !== "No knowledge base entries available."
-      ? `\n\n## Knowledge Base (Senior Team Insights)\n${knowledgeBase}`
-      : ""
+    // Check if API key is available
+    if (!process.env.OPENAI_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: "OPENAI_API_KEY not set" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      )
+    }
 
-  const result = await streamText({
-    model: google("gemini-2.0-flash"),
-    system: SYSTEM_PROMPT + knowledgeSection,
-    messages: [
-      {
-        role: "user",
-        content: `Analyze this sales meeting transcript and provide structured insights.
+    const knowledgeSection =
+      knowledgeBase && knowledgeBase !== "No knowledge base entries available."
+        ? `\n\n## Knowledge Base (Senior Team Insights)\n${knowledgeBase}`
+        : ""
+
+    const result = streamText({
+      model: openai("gpt-4o-mini"),
+      system: SYSTEM_PROMPT + knowledgeSection,
+      messages: [
+        {
+          role: "user",
+          content: `Analyze this sales meeting transcript and provide structured insights.
 
 Return your response using EXACTLY these section headers (in order):
 
@@ -47,9 +56,16 @@ Return your response using EXACTLY these section headers (in order):
 
 TRANSCRIPT:
 ${transcript}`,
-      },
-    ],
-  })
+        },
+      ],
+    })
 
-  return result.toTextStreamResponse()
+    return result.toTextStreamResponse()
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    return new Response(
+      JSON.stringify({ error: message }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    )
+  }
 }
