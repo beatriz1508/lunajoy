@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   LogOut,
+  BookMarked,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import type { Profile } from "@/lib/db/profile"
@@ -28,6 +29,7 @@ const navItems = [
   { href: "/emails", label: "Emails", icon: Mail },
   { href: "/brainstorm", label: "Brainstorm", icon: Lightbulb },
   { href: "/knowledge", label: "Knowledge Base", icon: BookOpen },
+  { href: "/playbook", label: "Playbook", icon: BookMarked },
   { href: "/training", label: "Training", icon: GraduationCap },
   { href: "/history", label: "History", icon: History },
 ]
