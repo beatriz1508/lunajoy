@@ -6,7 +6,7 @@
 export const ANALYSIS_SYSTEM_PROMPT = `You are an expert B2B sales consultant with 15+ years experience.
 Your role is to help sales reps become consultants — not just pitch features,
 but diagnose problems, challenge assumptions, and build business cases.
-Always respond in the same language the user is writing in.`
+Always respond in English.`
 
 export function buildAnalysisUserPrompt(transcript: string, knowledgeContext?: string): string {
   const knowledgeSection = knowledgeContext
@@ -92,7 +92,7 @@ export function extractEmailDraft(analysisText: string): { subject: string; body
 
 export const PREP_SYSTEM_PROMPT = `You are an expert B2B sales consultant with 15+ years experience.
 Generate a consultant-level meeting preparation. Be specific and actionable.
-Always respond in the same language the user is writing in.`
+Always respond in English.`
 
 export function buildPrepUserPrompt(params: {
   prospectName: string
@@ -138,4 +138,97 @@ export function buildPrepUserPrompt(params: {
 (Recommended approach and key talking points)`
 
   return prompt
+}
+
+// ---------------------------------------------------------------------------
+// Follow-Up Email (standalone, no full analysis)
+// ---------------------------------------------------------------------------
+
+export function buildFollowUpEmailPrompt(
+  transcript: string,
+  meetingTitle?: string,
+  attendees?: string[],
+  knowledgeContext?: string
+): string {
+  const meta = [
+    meetingTitle ? `Meeting: ${meetingTitle}` : "",
+    attendees?.length ? `Attendees: ${attendees.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  const kb = knowledgeContext
+    ? `\nUse these team knowledge base insights when relevant:\n${knowledgeContext}\n`
+    : ""
+
+  return `Generate a personalized, professional follow-up email for this sales meeting.
+${meta ? `\n${meta}` : ""}${kb}
+Include "Subject:" on the very first line, then the email body starting on the next line.
+
+The email should:
+- Thank the prospect for their time
+- Recap the key discussion points and value propositions
+- List agreed-upon next steps with clear ownership
+- Be warm but professional, ready to send as-is
+- Be concise (under 300 words)
+
+---
+
+TRANSCRIPT (max 15 000 chars):
+${transcript.slice(0, 15000)}`
+}
+
+// ---------------------------------------------------------------------------
+// Client-Facing Meeting Summary Doc
+// ---------------------------------------------------------------------------
+
+export const CLIENT_DOC_SYSTEM_PROMPT = `You are a professional meeting documentation specialist.
+Create polished, client-facing meeting summaries that can be shared directly
+with clients and stakeholders.
+Never include internal sales strategy, objection handling tactics, or
+competitive intelligence. Keep the tone professional and collaborative.
+Always respond in English.`
+
+export function buildClientDocPrompt(
+  transcript: string,
+  meetingTitle?: string,
+  meetingDate?: string,
+  attendees?: string[],
+  knowledgeContext?: string
+): string {
+  const meta = [
+    meetingTitle ? `Meeting: ${meetingTitle}` : "",
+    meetingDate ? `Date: ${meetingDate}` : "",
+    attendees?.length ? `Attendees: ${attendees.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  const kb = knowledgeContext
+    ? `\nUse these team knowledge base insights for accuracy:\n${knowledgeContext}\n`
+    : ""
+
+  return `Create a professional client-facing meeting summary document.
+${meta ? `\n${meta}` : ""}${kb}
+Use EXACTLY these section headers:
+
+## Meeting Overview
+(Brief description of the meeting purpose and context — 2-3 sentences)
+
+## Key Discussion Points
+(Numbered list of the main topics discussed, with brief descriptions)
+
+## Decisions Made
+(Bullet list of any decisions or agreements reached during the meeting)
+
+## Action Items
+(Checklist format: "- [ ] Action — Owner — Due date if mentioned")
+
+## Next Steps
+(Clear outline of what happens next, including follow-up meetings if any)
+
+---
+
+TRANSCRIPT (max 15 000 chars):
+${transcript.slice(0, 15000)}`
 }

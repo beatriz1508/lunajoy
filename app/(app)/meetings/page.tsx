@@ -18,6 +18,8 @@ import {
   Users,
   Zap,
   Sparkles,
+  Mail,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -102,6 +104,14 @@ export default function MeetingsPage() {
   const [sections, setSections] = useState<Record<string, string> | null>(null)
   const [saved, setSaved] = useState(false)
   const [emailDraft, setEmailDraft] = useState("")
+
+  // Follow-up email state
+  const [existingEmailId, setExistingEmailId] = useState<string | null>(null)
+  const [emailChecked, setEmailChecked] = useState(false)
+  const [generatedEmailText, setGeneratedEmailText] = useState("")
+
+  // Client meeting doc state
+  const [generatedDoc, setGeneratedDoc] = useState("")
 
   useEffect(() => {
     getKnowledgeContext().then(setKnowledgeContext)
@@ -191,6 +201,28 @@ export default function MeetingsPage() {
     onError: () => toast.error("Analysis failed."),
   })
 
+  const {
+    complete: completeEmail,
+    completion: emailCompletion,
+    isLoading: generatingEmail,
+  } = useCompletion({
+    api: "/api/generate-email",
+    streamProtocol: "text",
+    onFinish: (_p, result) => setGeneratedEmailText(result),
+    onError: () => toast.error("Email generation failed."),
+  })
+
+  const {
+    complete: completeDoc,
+    completion: docCompletion,
+    isLoading: generatingDoc,
+  } = useCompletion({
+    api: "/api/generate-meeting-doc",
+    streamProtocol: "text",
+    onFinish: (_p, result) => setGeneratedDoc(result),
+    onError: () => toast.error("Document generation failed."),
+  })
+
   const handleAnalyze = async () => {
     if (!transcript.trim()) {
       toast.error("Paste or load a transcript first.")
@@ -213,6 +245,93 @@ export default function MeetingsPage() {
     toast.success("Analysis saved to history!")
   }
 
+  const checkExistingEmail = useCallback(async (meetingTitle: string) => {
+    setEmailChecked(false)
+    setExistingEmailId(null)
+    try {
+      const res = await fetch(
+        `/api/emails/check?meeting_title=${encodeURIComponent(meetingTitle)}`
+      )
+      if (res.ok) {
+        const data = await res.json()
+        if (data.exists) setExistingEmailId(data.emailId)
+      }
+    } catch {
+      // Silently fail — button will default to "generate" mode
+    } finally {
+      setEmailChecked(true)
+    }
+  }, [])
+
+  const handleGenerateEmail = async () => {
+    if (!transcript.trim() || !selectedEvent) return
+    setGeneratedEmailText("")
+    await completeEmail("", {
+      body: {
+        transcript,
+        meetingTitle: selectedEvent.summary,
+        attendees: selectedEvent.attendees?.map((a) => a.email) ?? [],
+        knowledgeBase: knowledgeContext,
+      },
+    })
+  }
+
+  const handleGenerateDoc = async () => {
+    if (!transcript.trim() || !selectedEvent) return
+    setGeneratedDoc("")
+    const startStr = selectedEvent.start.dateTime ?? selectedEvent.start.date ?? ""
+    await completeDoc("", {
+      body: {
+        transcript,
+        meetingTitle: selectedEvent.summary,
+        meetingDate: startStr ? formatDate(startStr) : undefined,
+        attendees: selectedEvent.attendees?.map((a) => a.displayName ?? a.email) ?? [],
+        knowledgeBase: knowledgeContext,
+      },
+    })
+  }
+
+  const handleSaveEmailDraft = async () => {
+    if (!generatedEmailText || !selectedEvent) return
+    try {
+      const lines = generatedEmailText.split("\n")
+      let subject = "Follow-up"
+      let bodyStartIdx = 0
+      for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(/^\s*\**\s*Subject:\s*\**\s*(.+?)\s*\**\s*$/i)
+        if (m) {
+          subject = m[1].replace(/^\**\s*|\s*\**$/g, "").trim()
+          bodyStartIdx = i + 1
+          while (bodyStartIdx < lines.length && lines[bodyStartIdx].trim() === "") bodyStartIdx++
+          break
+        }
+      }
+      const body = lines.slice(bodyStartIdx).join("\n").trim()
+      const firstAttendee = selectedEvent.attendees?.find((a) => a.email)
+
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { toast.error("Not authenticated"); return }
+
+      await supabase.from("pending_emails").insert({
+        user_id: user.id,
+        to_email: firstAttendee?.email ?? "",
+        to_name: firstAttendee?.displayName ?? null,
+        subject,
+        body_text: body,
+        body_html: body,
+        status: "pending",
+        source: "manual",
+        meeting_title: selectedEvent.summary,
+      })
+
+      setExistingEmailId("saved")
+      toast.success("Email draft saved! Go to Emails to review & send.")
+    } catch {
+      toast.error("Failed to save email draft.")
+    }
+  }
+
   const filteredEvents = events.filter((e) => {
     const startStr = e.start.dateTime ?? e.start.date ?? ""
     if (filter === "past") return isPast(startStr)
@@ -226,7 +345,12 @@ export default function MeetingsPage() {
     setStoredMeeting(null)
     setSections(null)
     setSaved(false)
+    setExistingEmailId(null)
+    setEmailChecked(false)
+    setGeneratedEmailText("")
+    setGeneratedDoc("")
     void loadStoredTranscript(event)
+    if (event.summary) void checkExistingEmail(event.summary)
   }
 
   return (
@@ -456,6 +580,45 @@ export default function MeetingsPage() {
                 </div>
               )}
 
+              {/* Action buttons row */}
+              <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-emerald-200">
+                {emailChecked && existingEmailId ? (
+                  <a
+                    href="/emails"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-emerald-300 text-emerald-700 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    View Follow-Up Email
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                ) : (
+                  <button
+                    onClick={handleGenerateEmail}
+                    disabled={generatingEmail}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-emerald-300 text-emerald-700 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                  >
+                    {generatingEmail ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Mail className="w-3.5 h-3.5" />
+                    )}
+                    {generatingEmail ? "Generating…" : "Draft Follow-Up Email"}
+                  </button>
+                )}
+                <button
+                  onClick={handleGenerateDoc}
+                  disabled={generatingDoc}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium bg-white border border-emerald-300 text-emerald-700 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                >
+                  {generatingDoc ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <FileText className="w-3.5 h-3.5" />
+                  )}
+                  {generatingDoc ? "Generating…" : "Generate Meeting Doc"}
+                </button>
+              </div>
+
               {/* Inline transcript viewer */}
               <details className="mt-3 group">
                 <summary className="cursor-pointer text-xs font-medium text-emerald-700 hover:text-emerald-900 select-none">
@@ -467,6 +630,130 @@ export default function MeetingsPage() {
                   </pre>
                 </div>
               </details>
+            </div>
+          )}
+
+          {/* Generated follow-up email */}
+          {(generatingEmail || generatedEmailText) && (
+            <div className="bg-white border border-slate-200 border-l-4 border-l-purple-400 rounded-xl p-4 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                  <Mail className="w-4 h-4 text-purple-500" />
+                  Follow-Up Email
+                </h3>
+                {generatedEmailText && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(generatedEmailText)
+                        toast.success("Email copied!")
+                      }}
+                      className="p-1 rounded hover:bg-slate-100 text-slate-400"
+                      title="Copy"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+              {generatingEmail && !generatedEmailText && (
+                <div className="flex items-center gap-2 text-sm text-purple-600">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Drafting follow-up email…
+                </div>
+              )}
+              {generatingEmail && emailCompletion && (
+                <p className="text-xs text-slate-500 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {emailCompletion.slice(-500)}
+                </p>
+              )}
+              {generatedEmailText && !generatingEmail && (
+                <>
+                  <pre className="text-sm text-slate-700 whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-y-auto">
+                    {generatedEmailText}
+                  </pre>
+                  <div className="flex gap-2 mt-3 pt-3 border-t border-slate-100">
+                    <Button
+                      onClick={() => void handleSaveEmailDraft()}
+                      size="sm"
+                      className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-xs"
+                      disabled={existingEmailId === "saved"}
+                    >
+                      {existingEmailId === "saved" ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Saved to Emails
+                        </>
+                      ) : (
+                        <>
+                          <Mail className="w-3.5 h-3.5" />
+                          Save as Draft
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Generated client meeting doc */}
+          {(generatingDoc || generatedDoc) && (
+            <div className="bg-white border border-slate-200 border-l-4 border-l-indigo-400 rounded-xl p-4 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-indigo-500" />
+                  Client Meeting Summary
+                </h3>
+                {generatedDoc && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(generatedDoc)
+                        toast.success("Document copied!")
+                      }}
+                      className="p-1 rounded hover:bg-slate-100 text-slate-400"
+                      title="Copy"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const blob = new Blob([generatedDoc], { type: "text/plain" })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement("a")
+                        a.href = url
+                        a.download = `${selectedEvent?.summary ?? "meeting"}-summary.txt`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                        toast.success("Downloaded!")
+                      }}
+                      className="p-1 rounded hover:bg-slate-100 text-slate-400"
+                      title="Download"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+              {generatingDoc && !generatedDoc && (
+                <div className="flex items-center gap-2 text-sm text-indigo-600">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Generating meeting summary…
+                </div>
+              )}
+              {generatingDoc && docCompletion && (
+                <p className="text-xs text-slate-500 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {docCompletion.slice(-500)}
+                </p>
+              )}
+              {generatedDoc && !generatingDoc && (
+                <div className="prose prose-sm max-w-none max-h-96 overflow-y-auto">
+                  <pre className="text-sm text-slate-700 whitespace-pre-wrap font-sans leading-relaxed">
+                    {generatedDoc}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
 
