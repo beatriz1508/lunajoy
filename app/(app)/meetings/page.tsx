@@ -139,11 +139,33 @@ export default function MeetingsPage() {
     setLoadingTranscript(true)
     try {
       const supabase = createClient()
-      const { data } = await supabase
+
+      // 1. Try exact match by calendar_event_id
+      let { data } = await supabase
         .from("meeting_transcripts")
         .select("id, transcript, recording_url, transcript_doc_url, created_at")
         .eq("calendar_event_id", event.id)
         .maybeSingle()
+
+      // 2. Fallback: match by title + date (handles cross-calendar ID mismatch)
+      if (!data && event.summary) {
+        const eventDate = event.start.dateTime ?? event.start.date
+        if (eventDate) {
+          const dayStart = new Date(eventDate)
+          dayStart.setHours(0, 0, 0, 0)
+          const dayEnd = new Date(dayStart)
+          dayEnd.setDate(dayEnd.getDate() + 1)
+
+          const fallback = await supabase
+            .from("meeting_transcripts")
+            .select("id, transcript, recording_url, transcript_doc_url, created_at")
+            .eq("meeting_title", event.summary)
+            .gte("meeting_date", dayStart.toISOString())
+            .lt("meeting_date", dayEnd.toISOString())
+            .maybeSingle()
+          data = fallback.data
+        }
+      }
 
       if (data) {
         setStoredMeeting(data as StoredMeetingTranscript)
