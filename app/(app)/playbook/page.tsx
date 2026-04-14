@@ -237,9 +237,9 @@ function MindsetSection() {
         </div>
         <VsRow bad='"I think this could work for you"' good='"What we typically see with clinics like yours is…"' />
         <VsRow bad='"Maybe we can try…"' good='"This is how it works in practice…"' />
-        <VsRow bad='"I\'m not sure, but…"' good='"Based on what you\'ve told me, this is where this usually leads…"' />
-        <VsRow bad='"It depends, I guess"' good='"The data shows 30% of patients screen positive — that\'s not an estimate, that\'s a study."' />
-        <VsRow bad='"Hopefully this fits your needs"' good='"We\'ve made the numbers work for every clinic in your situation."' />
+        <VsRow bad={'"I\'m not sure, but…"'} good={'"Based on what you\'ve told me, this is where this usually leads…"'} />
+        <VsRow bad={'"It depends, I guess"'} good={'"The data shows 30% of patients screen positive — that\'s not an estimate, that\'s a study."'} />
+        <VsRow bad={'"Hopefully this fits your needs"'} good={'"We\'ve made the numbers work for every clinic in your situation."'} />
       </div>
 
       <div>
