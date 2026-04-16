@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { validateWebhookKey, unauthorizedResponse } from "@/lib/auth/webhook"
-import { searchLeads, type ApolloPerson } from "@/lib/apollo"
-import { enrichFromWebsite } from "@/lib/apify"
-import { createContact, findContactByEmail, addTags } from "@/lib/ghl"
+import { scrapeLeads, type ScrapedLead } from "@/lib/apify"
+import { createContact, findContactByEmail, addToWorkflow } from "@/lib/ghl"
 import { createAdminClient } from "@/lib/supabase/admin"
 
 interface ScrapeRequest {
-  personTitles?: string[]
-  organizationIndustries?: string[]
-  personLocations?: string[]
-  employeeRanges?: string[]
-  perPage?: number
-  page?: number
-  skipEnrichment?: boolean
+  searchTerms?: string[]
+  locationQuery?: string
+  maxResults?: number
+  skipWebsiteEnrichment?: boolean
   workflowId?: string
   tags?: string[]
 }
@@ -26,41 +22,35 @@ export async function POST(req: NextRequest) {
   const results = {
     created: [] as string[],
     duplicates: [] as string[],
-    errors: [] as Array<{ email: string; error: string }>,
+    skippedNoEmail: [] as string[],
+    errors: [] as Array<{ name: string; error: string }>,
     totalFound: 0,
   }
 
   try {
-    // 1. Search Apollo for leads
-    const apolloResult = await searchLeads({
-      personTitles: body.personTitles ?? [
-        "Practice Manager",
-        "Office Manager",
-        "Medical Director",
-        "Practice Administrator",
-        "Clinic Manager",
-        "Operations Director",
-      ],
-      organizationIndustries: body.organizationIndustries,
-      personLocations: body.personLocations,
-      employeeRanges: body.employeeRanges ?? ["1,10", "11,50", "51,200"],
-      perPage: body.perPage ?? 25,
-      page: body.page ?? 1,
-    })
+    // 1. Scrape Google Maps + enrich websites via Apify
+    const leads = await scrapeLeads(
+      {
+        searchTerms: body.searchTerms ?? [
+          "medical practice",
+          "family medicine clinic",
+          "primary care physician",
+        ],
+        locationQuery: body.locationQuery,
+        maxResults: body.maxResults ?? 20,
+      },
+      { skipWebsiteEnrichment: body.skipWebsiteEnrichment }
+    )
 
-    results.totalFound = apolloResult.pagination.total_entries
-    const leads = apolloResult.people
+    results.totalFound = leads.length
 
-    // 2. Process each lead
-    for (const person of leads) {
+    // 2. Process each lead → push to GHL
+    for (const lead of leads) {
       try {
-        await processLead(person, body, results)
+        await processLead(lead, body, results)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        results.errors.push({
-          email: person.email ?? person.id,
-          error: msg,
-        })
+        results.errors.push({ name: lead.practiceName, error: msg })
       }
     }
 
@@ -71,9 +61,9 @@ export async function POST(req: NextRequest) {
       success: true,
       summary: {
         totalFound: results.totalFound,
-        processed: leads.length,
         created: results.created.length,
         duplicates: results.duplicates.length,
+        skippedNoEmail: results.skippedNoEmail.length,
         errors: results.errors.length,
       },
       details: results,
@@ -82,87 +72,106 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await logAutomationRun(results, startTime, message)
-
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
 async function processLead(
-  person: ApolloPerson,
+  lead: ScrapedLead,
   options: ScrapeRequest,
-  results: { created: string[]; duplicates: string[]; errors: Array<{ email: string; error: string }> }
+  results: {
+    created: string[]
+    duplicates: string[]
+    skippedNoEmail: string[]
+    errors: Array<{ name: string; error: string }>
+  }
 ) {
-  if (!person.email) {
-    results.errors.push({ email: person.id, error: "No email found" })
-    return
-  }
+  // Use the first email found from website enrichment, or phone as fallback identifier
+  const email = lead.emails[0]
 
-  // Check for duplicates in GHL
-  const existing = await findContactByEmail(person.email)
-  if (existing) {
-    results.duplicates.push(person.email)
-    return
-  }
-
-  // Enrich via Apify (optional)
-  let enrichment: { services?: string[]; specialties?: string[]; providerCount?: number } = {}
-  if (!options.skipEnrichment && person.organization?.website_url) {
-    try {
-      enrichment = await enrichFromWebsite(person.organization.website_url)
-    } catch (err) {
-      // Enrichment is best-effort — continue without it
-      console.warn(`Enrichment failed for ${person.email}:`, err)
+  if (!email) {
+    // No email — still push to GHL if we have a phone number
+    if (!lead.phone) {
+      results.skippedNoEmail.push(lead.practiceName)
+      return
     }
   }
 
-  // Build custom fields from enrichment
-  const customFields: Array<{ id: string; value: string }> = []
-  if (enrichment.specialties?.length) {
-    customFields.push({ id: "specialties", value: enrichment.specialties.join(", ") })
+  // Check for duplicates by email or phone
+  if (email) {
+    const existing = await findContactByEmail(email)
+    if (existing) {
+      results.duplicates.push(email)
+      return
+    }
   }
-  if (enrichment.services?.length) {
-    customFields.push({ id: "services", value: enrichment.services.join(", ") })
-  }
-  if (enrichment.providerCount) {
-    customFields.push({ id: "provider_count", value: String(enrichment.providerCount) })
-  }
-  if (person.linkedin_url) {
-    customFields.push({ id: "linkedin_url", value: person.linkedin_url })
+  if (lead.phone) {
+    const { findContactByPhone } = await import("@/lib/ghl")
+    const existing = await findContactByPhone(lead.phone)
+    if (existing) {
+      results.duplicates.push(lead.phone)
+      return
+    }
   }
 
-  // Create contact in GHL
+  // Build custom fields
+  const customFields: Array<{ id: string; value: string }> = []
+  if (lead.specialties.length) {
+    customFields.push({ id: "specialties", value: lead.specialties.join(", ") })
+  }
+  if (lead.services.length) {
+    customFields.push({ id: "services", value: lead.services.join(", ") })
+  }
+  if (lead.providerCount) {
+    customFields.push({ id: "provider_count", value: String(lead.providerCount) })
+  }
+  if (lead.googleMapsUrl) {
+    customFields.push({ id: "google_maps_url", value: lead.googleMapsUrl })
+  }
+  if (lead.rating) {
+    customFields.push({ id: "google_rating", value: String(lead.rating) })
+  }
+  if (lead.category) {
+    customFields.push({ id: "practice_type", value: lead.category })
+  }
+
   const tags = [
-    "apollo-lead",
+    "apify-lead",
     "medical-practice",
     "auto-scraped",
     ...(options.tags ?? []),
   ]
 
+  // Create contact in GHL (use practice name as company)
   const contact = await createContact({
-    firstName: person.first_name,
-    lastName: person.last_name,
-    email: person.email,
-    phone: person.phone_numbers?.[0]?.raw_number,
-    companyName: person.organization?.name,
-    website: person.organization?.website_url ?? undefined,
-    city: person.city ?? undefined,
-    state: person.state ?? undefined,
-    source: "apollo-apify-automation",
+    firstName: lead.practiceName,
+    lastName: "",
+    ...(email ? { email } : {}),
+    phone: lead.phone,
+    companyName: lead.practiceName,
+    website: lead.website,
+    address1: lead.address,
+    city: lead.city,
+    state: lead.state,
+    source: "apify-google-maps",
     tags,
     customFields: customFields.length > 0 ? customFields : undefined,
   })
 
-  // Add extra tags if contact was created successfully
   if (contact?.id && options.workflowId) {
-    const { addToWorkflow } = await import("@/lib/ghl")
     await addToWorkflow(contact.id, options.workflowId)
   }
 
-  results.created.push(person.email)
+  results.created.push(email ?? lead.practiceName)
 }
 
 async function logAutomationRun(
-  results: { created: string[]; duplicates: string[]; errors: Array<{ email: string; error: string }> },
+  results: {
+    created: string[]
+    duplicates: string[]
+    skippedNoEmail: string[]
+    errors: Array<{ name: string; error: string }>
+  },
   startTime: number,
   fatalError?: string
 ) {
@@ -174,6 +183,7 @@ async function logAutomationRun(
       result: {
         created: results.created.length,
         duplicates: results.duplicates.length,
+        skippedNoEmail: results.skippedNoEmail.length,
         errors: results.errors.length,
         errorDetails: results.errors,
         fatalError,

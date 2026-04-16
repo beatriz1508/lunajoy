@@ -19,7 +19,7 @@ function headers(apiKey: string) {
 export interface GHLContactData {
   firstName: string
   lastName: string
-  email: string
+  email?: string
   phone?: string
   companyName?: string
   website?: string
@@ -82,6 +82,30 @@ export async function findContactByEmail(email: string): Promise<GHLContact | nu
     if (res.status === 404) return null
     const text = await res.text()
     throw new Error(`GHL search error ${res.status}: ${text}`)
+  }
+
+  const result = await res.json()
+  return result.contact ?? null
+}
+
+/**
+ * Search for an existing contact by phone to prevent duplicates.
+ */
+export async function findContactByPhone(phone: string): Promise<GHLContact | null> {
+  const { apiKey, locationId } = getConfig()
+
+  const res = await fetch(
+    `${GHL_BASE_URL}/contacts/search/duplicate?locationId=${locationId}&number=${encodeURIComponent(phone)}`,
+    {
+      method: "GET",
+      headers: headers(apiKey),
+    }
+  )
+
+  if (!res.ok) {
+    if (res.status === 404) return null
+    const text = await res.text()
+    throw new Error(`GHL search by phone error ${res.status}: ${text}`)
   }
 
   const result = await res.json()

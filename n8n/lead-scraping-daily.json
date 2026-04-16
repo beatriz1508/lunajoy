@@ -38,13 +38,13 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  personTitles: [\n    \"Practice Manager\",\n    \"Office Manager\",\n    \"Medical Director\",\n    \"Practice Administrator\",\n    \"Clinic Manager\",\n    \"Operations Director\",\n    \"Chief Medical Officer\",\n    \"Healthcare Administrator\"\n  ],\n  personLocations: [\"United States\"],\n  employeeRanges: [\"1,10\", \"11,50\", \"51,200\"],\n  perPage: 25,\n  page: 1,\n  tags: [\"daily-scrape\"]\n}) }}",
+        "jsonBody": "={{ JSON.stringify({\n  searchTerms: [\n    \"medical practice\",\n    \"family medicine clinic\",\n    \"primary care physician\",\n    \"behavioral health clinic\"\n  ],\n  locationQuery: \"United States\",\n  maxResults: 25,\n  skipWebsiteEnrichment: false,\n  tags: [\"daily-scrape\"]\n}) }}",
         "options": {
           "timeout": 300000
         }
       },
       "id": "lead-scrape-002",
-      "name": "Scrape Leads (Apollo → Apify → GHL)",
+      "name": "Scrape Leads (Google Maps → Website → GHL)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [440, 300]
@@ -133,10 +133,10 @@
   "connections": {
     "Every Day 08:00": {
       "main": [
-        [{ "node": "Scrape Leads (Apollo → Apify → GHL)", "type": "main", "index": 0 }]
+        [{ "node": "Scrape Leads (Google Maps → Website → GHL)", "type": "main", "index": 0 }]
       ]
     },
-    "Scrape Leads (Apollo → Apify → GHL)": {
+    "Scrape Leads (Google Maps → Website → GHL)": {
       "main": [
         [{ "node": "Check Success", "type": "main", "index": 0 }]
       ]
