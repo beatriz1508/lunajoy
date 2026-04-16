@@ -30,6 +30,8 @@ export interface GoogleMapsPlace {
   totalScore?: number
   reviewsCount?: number
   email?: string
+  emails?: string[]
+  contactInfo?: { emails?: string[]; phones?: string[] }
 }
 
 export interface WebsiteEnrichment {
@@ -101,68 +103,78 @@ export async function searchGoogleMaps(
   if (!runId) throw new Error("Apify Google Maps: no run ID returned")
 
   const items = await waitForRunItems(runId, token, 180_000)
+
   return items as GoogleMapsPlace[]
 }
 
-// ─── Website Enrichment ──────────────────────────────────────────
+// ─── Website Enrichment (Direct HTTP — no Apify Actor needed) ────
 
 /**
- * Scrape a practice's website to extract emails, phones, services, and specialties.
+ * Scrape a practice's website directly via HTTP to extract emails, phones,
+ * services, and specialties. Fetches main page + common contact pages.
+ * Much faster and cheaper than spinning up an Apify Actor per site.
  */
 export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnrichment> {
-  const token = getToken()
-
-  // Normalize base URL
   const baseUrl = websiteUrl.replace(/\/+$/, "")
 
-  // Crawl main site + key pages where emails are typically found
-  const startUrls = [
-    { url: baseUrl },
-    { url: `${baseUrl}/contact` },
-    { url: `${baseUrl}/contact-us` },
-    { url: `${baseUrl}/about` },
-    { url: `${baseUrl}/about-us` },
-    { url: `${baseUrl}/our-team` },
-    { url: `${baseUrl}/providers` },
-    { url: `${baseUrl}/staff` },
+  // Fetch multiple pages in parallel — contact/about pages have emails most often
+  const pagesToFetch = [
+    baseUrl,
+    `${baseUrl}/contact`,
+    `${baseUrl}/contact-us`,
+    `${baseUrl}/about`,
+    `${baseUrl}/about-us`,
+    `${baseUrl}/our-team`,
+    `${baseUrl}/providers`,
+    `${baseUrl}/services`,
   ]
 
-  const runRes = await fetch(
-    `${APIFY_BASE_URL}/acts/apify~website-content-crawler/runs?token=${token}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        startUrls,
-        maxCrawlPages: 15,
-        maxCrawlDepth: 2,
-        // Include link hrefs so we can capture mailto: links
-        saveHtml: true,
-      }),
-    }
+  const results = await Promise.allSettled(
+    pagesToFetch.map((url) => fetchPage(url))
   )
 
-  if (!runRes.ok) {
-    const text = await runRes.text()
-    throw new Error(`Apify website crawler error ${runRes.status}: ${text}`)
+  let allHtml = ""
+  let allText = ""
+
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      allHtml += result.value.html + "\n"
+      allText += result.value.text + "\n"
+    }
   }
 
-  const run = await runRes.json()
-  const runId = run.data?.id
-  if (!runId) throw new Error("Apify website crawler: no run ID returned")
-
-  const items = await waitForRunItems(runId, token, 180_000)
-
-  // Combine text + HTML from all crawled pages for maximum extraction
-  const allText = items
-    .map((item: Record<string, unknown>) => String(item.text ?? item.content ?? item.body ?? ""))
-    .join("\n")
-
-  const allHtml = items
-    .map((item: Record<string, unknown>) => String(item.html ?? ""))
-    .join("\n")
-
   return parseWebsiteContent(allText, allHtml)
+}
+
+async function fetchPage(url: string): Promise<{ html: string; text: string } | null> {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; LunaJoyBot/1.0; +https://lunajoy.com)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    })
+
+    clearTimeout(timeout)
+
+    if (!res.ok) return null
+
+    const html = await res.text()
+    // Strip HTML tags for text extraction
+    const text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+
+    return { html, text }
+  } catch {
+    return null
+  }
 }
 
 // ─── Full Pipeline: Maps + Website ──────────────────────────────
@@ -178,7 +190,7 @@ export async function scrapeLeads(
   // Step 1: Search Google Maps
   const places = await searchGoogleMaps(filters)
 
-  // Step 2: Enrich each place with website data
+  // Step 2: Enrich each place
   const leads: ScrapedLead[] = []
 
   for (const place of places) {
@@ -199,17 +211,36 @@ export async function scrapeLeads(
       specialties: [],
     }
 
-    // Enrich from website if available
-    if (!options.skipWebsiteEnrichment && place.website) {
+    if (place.website && !options.skipWebsiteEnrichment) {
+      // Step 2a: Hunter.io — find emails by domain (most reliable)
+      try {
+        const { findEmailsByDomain, extractDomain } = await import("@/lib/hunter")
+        const domain = extractDomain(place.website)
+        const hunterResult = await findEmailsByDomain(domain, { limit: 3 })
+        if (hunterResult.emails.length > 0) {
+          lead.emails = hunterResult.emails.map((e) => e.value.toLowerCase())
+          // Use the first person's name as contact
+          const firstPerson = hunterResult.emails.find((e) => e.firstName)
+          if (firstPerson) {
+            lead.contactName = [firstPerson.firstName, firstPerson.lastName]
+              .filter(Boolean).join(" ")
+          }
+        }
+      } catch (err) {
+        console.warn(`Hunter.io failed for ${place.title}:`, err)
+      }
+
+      // Step 2b: Direct website fetch — extract services, specialties, and fallback emails
       try {
         const enrichment = await enrichFromWebsite(place.website)
-        lead.emails = enrichment.emails
+        if (lead.emails.length === 0 && enrichment.emails.length > 0) {
+          lead.emails = enrichment.emails
+        }
         lead.services = enrichment.services
         lead.specialties = enrichment.specialties
         lead.providerCount = enrichment.providerCount
         lead.description = enrichment.description
       } catch (err) {
-        // Website enrichment is best-effort
         console.warn(`Website enrichment failed for ${place.title}:`, err)
       }
     }
