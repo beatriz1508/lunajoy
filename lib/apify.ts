@@ -112,15 +112,32 @@ export async function searchGoogleMaps(
 export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnrichment> {
   const token = getToken()
 
+  // Normalize base URL
+  const baseUrl = websiteUrl.replace(/\/+$/, "")
+
+  // Crawl main site + key pages where emails are typically found
+  const startUrls = [
+    { url: baseUrl },
+    { url: `${baseUrl}/contact` },
+    { url: `${baseUrl}/contact-us` },
+    { url: `${baseUrl}/about` },
+    { url: `${baseUrl}/about-us` },
+    { url: `${baseUrl}/our-team` },
+    { url: `${baseUrl}/providers` },
+    { url: `${baseUrl}/staff` },
+  ]
+
   const runRes = await fetch(
     `${APIFY_BASE_URL}/acts/apify~website-content-crawler/runs?token=${token}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        startUrls: [{ url: websiteUrl }],
-        maxCrawlPages: 5,
-        maxCrawlDepth: 1,
+        startUrls,
+        maxCrawlPages: 15,
+        maxCrawlDepth: 2,
+        // Include link hrefs so we can capture mailto: links
+        saveHtml: true,
       }),
     }
   )
@@ -134,14 +151,18 @@ export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnri
   const runId = run.data?.id
   if (!runId) throw new Error("Apify website crawler: no run ID returned")
 
-  const items = await waitForRunItems(runId, token, 120_000)
+  const items = await waitForRunItems(runId, token, 180_000)
 
-  // Combine text from all crawled pages
+  // Combine text + HTML from all crawled pages for maximum extraction
   const allText = items
     .map((item: Record<string, unknown>) => String(item.text ?? item.content ?? item.body ?? ""))
     .join("\n")
 
-  return parseWebsiteContent(allText)
+  const allHtml = items
+    .map((item: Record<string, unknown>) => String(item.html ?? ""))
+    .join("\n")
+
+  return parseWebsiteContent(allText, allHtml)
 }
 
 // ─── Full Pipeline: Maps + Website ──────────────────────────────
@@ -236,7 +257,7 @@ async function waitForRunItems(
   throw new Error(`Apify run ${runId} timed out after ${maxWaitMs}ms`)
 }
 
-function parseWebsiteContent(text: string): WebsiteEnrichment {
+function parseWebsiteContent(text: string, html: string = ""): WebsiteEnrichment {
   const result: WebsiteEnrichment = {
     emails: [],
     phones: [],
@@ -244,21 +265,77 @@ function parseWebsiteContent(text: string): WebsiteEnrichment {
     specialties: [],
   }
 
-  // Extract emails
-  const emailMatches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g)
-  if (emailMatches) {
-    result.emails = [...new Set(emailMatches)].filter(
-      (e) => !e.includes("example") && !e.includes("sentry") && !e.includes("wixpress")
-    )
+  // ── Extract emails from multiple sources ──
+
+  const allEmails = new Set<string>()
+
+  // 1. From visible text
+  const textEmailMatches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g)
+  if (textEmailMatches) textEmailMatches.forEach((e) => allEmails.add(e.toLowerCase()))
+
+  // 2. From mailto: links in HTML
+  const mailtoMatches = html.match(/mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi)
+  if (mailtoMatches) {
+    mailtoMatches.forEach((m) => {
+      const email = m.replace(/^mailto:/i, "").split("?")[0].toLowerCase()
+      allEmails.add(email)
+    })
   }
 
-  // Extract phone numbers (US format)
+  // 3. From href attributes containing @ (some sites obfuscate emails in links)
+  const hrefEmailMatches = html.match(/href=["'][^"']*?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})[^"']*?["']/gi)
+  if (hrefEmailMatches) {
+    hrefEmailMatches.forEach((m) => {
+      const emailMatch = m.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)
+      if (emailMatch) allEmails.add(emailMatch[1].toLowerCase())
+    })
+  }
+
+  // 4. From HTML content attributes, meta tags, JSON-LD structured data
+  const metaEmailMatches = html.match(/content=["'][^"']*?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})[^"']*?["']/gi)
+  if (metaEmailMatches) {
+    metaEmailMatches.forEach((m) => {
+      const emailMatch = m.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)
+      if (emailMatch) allEmails.add(emailMatch[1].toLowerCase())
+    })
+  }
+
+  // 5. From JSON-LD / schema.org structured data
+  const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+  if (jsonLdMatches) {
+    jsonLdMatches.forEach((block) => {
+      const emailsInBlock = block.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g)
+      if (emailsInBlock) emailsInBlock.forEach((e) => allEmails.add(e.toLowerCase()))
+    })
+  }
+
+  // Filter out junk emails
+  const junkPatterns = [
+    "example", "sentry", "wixpress", "wordpress", "noreply", "no-reply",
+    "donotreply", "unsubscribe", "test@", "info@sentry", ".png", ".jpg",
+    "webpack", "localhost", "schema.org",
+  ]
+  result.emails = [...allEmails].filter(
+    (e) => !junkPatterns.some((p) => e.includes(p))
+  )
+
+  // Prioritize: office/info/contact emails first, then personal
+  result.emails.sort((a, b) => {
+    const priorityPrefixes = ["info@", "office@", "contact@", "admin@", "reception@", "front"]
+    const aScore = priorityPrefixes.findIndex((p) => a.startsWith(p))
+    const bScore = priorityPrefixes.findIndex((p) => b.startsWith(p))
+    if (aScore >= 0 && bScore < 0) return -1
+    if (bScore >= 0 && aScore < 0) return 1
+    return 0
+  })
+
+  // ── Extract phone numbers (US format) ──
   const phoneMatches = text.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g)
   if (phoneMatches) {
     result.phones = [...new Set(phoneMatches)]
   }
 
-  // Extract medical specialties
+  // ── Extract medical specialties ──
   const specialtyKeywords = [
     "family medicine", "internal medicine", "pediatrics", "ob/gyn", "obstetrics",
     "cardiology", "dermatology", "orthopedics", "psychiatry", "psychology",
@@ -268,7 +345,7 @@ function parseWebsiteContent(text: string): WebsiteEnrichment {
   ]
   result.specialties = specialtyKeywords.filter((s) => text.toLowerCase().includes(s))
 
-  // Extract services
+  // ── Extract services ──
   const serviceKeywords = [
     "telehealth", "telemedicine", "in-person", "walk-in", "appointments",
     "lab services", "imaging", "x-ray", "vaccination", "wellness",
@@ -277,11 +354,11 @@ function parseWebsiteContent(text: string): WebsiteEnrichment {
   ]
   result.services = serviceKeywords.filter((s) => text.toLowerCase().includes(s))
 
-  // Provider count
+  // ── Provider count ──
   const providerMatch = text.match(/(\d+)\s*(?:providers?|doctors?|physicians?|practitioners?)/i)
   if (providerMatch) result.providerCount = parseInt(providerMatch[1], 10)
 
-  // First paragraph as description
+  // ── Description ──
   const paragraphs = text.split(/\n\n+/).filter((p) => p.trim().length > 50)
   if (paragraphs.length > 0) {
     result.description = paragraphs[0].trim().slice(0, 300)
