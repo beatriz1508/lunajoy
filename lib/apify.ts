@@ -117,20 +117,13 @@ export async function searchGoogleMaps(
 
 /**
  * Scrape a practice's website and return raw content.
- * Tries Apify Content Crawler first (handles JS, proxies), falls back to direct fetch.
+ * Uses direct fetch first (fast, ~1-2s). Falls back to Apify only if
+ * direct fetch returns too little content (JS-heavy sites).
  */
 export async function crawlWebsite(websiteUrl: string): Promise<{ text: string; html: string }> {
   const baseUrl = websiteUrl.replace(/\/+$/, "")
 
-  // Try Apify Website Content Crawler first (handles JS-heavy sites)
-  try {
-    const apifyResult = await crawlWithApify(baseUrl)
-    if (apifyResult.text.length > 500) return apifyResult
-  } catch (err) {
-    console.warn("Apify crawler failed, falling back to direct fetch:", err)
-  }
-
-  // Fallback: direct fetch in parallel
+  // Primary: direct fetch in parallel (fast)
   const pagesToFetch = [
     baseUrl,
     `${baseUrl}/contact`,
@@ -152,6 +145,19 @@ export async function crawlWebsite(websiteUrl: string): Promise<{ text: string; 
       allHtml += result.value.html + "\n"
       allText += result.value.text + "\n"
     }
+  }
+
+  // If direct fetch got enough content, return immediately
+  if (allText.length > 500) {
+    return { text: allText, html: allHtml }
+  }
+
+  // Fallback: Apify for JS-heavy sites
+  try {
+    const apifyResult = await crawlWithApify(baseUrl)
+    if (apifyResult.text.length > allText.length) return apifyResult
+  } catch (err) {
+    console.warn("Apify crawler fallback failed:", err)
   }
 
   return { text: allText, html: allHtml }
@@ -187,7 +193,7 @@ async function crawlWithApify(url: string): Promise<{ text: string; html: string
   const runId = run.data?.id
   if (!runId) throw new Error("No run ID")
 
-  const items = await waitForRunItems(runId, token, 90_000)
+  const items = await waitForRunItems(runId, token, 45_000)
 
   const text = items
     .map((i: Record<string, unknown>) => String(i.text ?? i.markdown ?? i.content ?? ""))
@@ -250,12 +256,25 @@ export async function scrapeLeads(
   // Step 1: Search Google Maps
   const places = await searchGoogleMaps(filters)
 
-  // Step 2: Enrich each place
+  // Step 2: Enrich each place IN PARALLEL (batched for API rate limits)
+  const BATCH_SIZE = 5
   const leads: ScrapedLead[] = []
 
-  for (const place of places) {
-    const lead: ScrapedLead = {
-      practiceName: place.title,
+  for (let i = 0; i < places.length; i += BATCH_SIZE) {
+    const batch = places.slice(i, i + BATCH_SIZE)
+    const batchLeads = await Promise.all(batch.map((place) => enrichPlace(place, options)))
+    leads.push(...batchLeads)
+  }
+
+  return leads
+}
+
+async function enrichPlace(
+  place: GoogleMapsPlace,
+  options: { skipWebsiteEnrichment?: boolean }
+): Promise<ScrapedLead> {
+  const lead: ScrapedLead = {
+    practiceName: place.title,
       address: place.address,
       city: place.city,
       state: place.state,
@@ -343,10 +362,7 @@ export async function scrapeLeads(
       }
     }
 
-    leads.push(lead)
-  }
-
-  return leads
+  return lead
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
