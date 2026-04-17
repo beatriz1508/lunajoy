@@ -341,7 +341,7 @@ async function enrichPlace(
         }
       }
 
-      // Step 2c: Hunter.io as final fallback if still no emails
+      // Step 2c: Hunter.io as fallback if still no emails
       if (lead.emails.length === 0) {
         try {
           const { findEmailsByDomain, extractDomain } = await import("@/lib/hunter")
@@ -358,6 +358,28 @@ async function enrichPlace(
           }
         } catch (err) {
           console.warn(`Hunter.io fallback failed for ${place.title}:`, err)
+        }
+      }
+
+      // Step 2d: OpenAI web search as final fallback — searches open web for emails
+      if (lead.emails.length === 0) {
+        try {
+          const { searchEmailOnWeb } = await import("@/lib/ai-enrichment")
+          const webResult = await searchEmailOnWeb({
+            practiceName: place.title,
+            website: place.website,
+            city: place.city,
+            state: place.state,
+          })
+          if (webResult.emails.length > 0) {
+            lead.emails = webResult.emails.map((e) => e.toLowerCase())
+            if (webResult.contactName && !lead.contactName) {
+              lead.contactName = webResult.contactName
+              lead.contactTitle = webResult.title
+            }
+          }
+        } catch (err) {
+          console.warn(`OpenAI web search fallback failed for ${place.title}:`, err)
         }
       }
     }

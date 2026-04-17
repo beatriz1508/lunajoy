@@ -87,3 +87,89 @@ ${content}`,
 
   return object
 }
+
+/**
+ * Use OpenAI with web_search tool to find emails for a practice on the open web.
+ * Called as a fallback when AI extraction from website didn't find emails
+ * and Hunter.io has no data.
+ */
+export async function searchEmailOnWeb(params: {
+  practiceName: string
+  website?: string
+  city?: string
+  state?: string
+}): Promise<{ emails: string[]; contactName?: string; title?: string }> {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error("Missing OPENAI_API_KEY")
+
+  const locationHint = [params.city, params.state].filter(Boolean).join(", ")
+  const websiteHint = params.website ? ` (${params.website})` : ""
+
+  const prompt = `Find contact email addresses for "${params.practiceName}"${websiteHint}${locationHint ? ` located in ${locationHint}` : ""}, a medical practice in the United States.
+
+Search for:
+- Office manager, practice manager, or practice administrator email
+- General contact email (info@, office@, contact@)
+- Any email on their website, LinkedIn, healthcare directories, or Google Business profile
+
+Respond ONLY with valid JSON matching this exact schema:
+{
+  "emails": ["email1@domain.com", "email2@domain.com"],
+  "contactName": "full name if found, null otherwise",
+  "title": "job title if found, null otherwise"
+}
+
+Return empty emails array if no legitimate emails found. Do not guess or fabricate.`
+
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      tools: [{ type: "web_search_preview" }],
+      input: prompt,
+    }),
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`OpenAI web search error ${res.status}: ${text}`)
+  }
+
+  const data = await res.json()
+
+  // Extract the text output from the response
+  let outputText = ""
+  if (Array.isArray(data.output)) {
+    for (const item of data.output) {
+      if (item.type === "message" && Array.isArray(item.content)) {
+        for (const c of item.content) {
+          if (c.type === "output_text" && typeof c.text === "string") {
+            outputText += c.text
+          }
+        }
+      }
+    }
+  }
+  if (!outputText && data.output_text) outputText = data.output_text
+
+  // Parse JSON from response (may have markdown fences)
+  const jsonMatch = outputText.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) {
+    return { emails: [] }
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0])
+    return {
+      emails: Array.isArray(parsed.emails) ? parsed.emails : [],
+      contactName: parsed.contactName ?? undefined,
+      title: parsed.title ?? undefined,
+    }
+  } catch {
+    return { emails: [] }
+  }
+}
