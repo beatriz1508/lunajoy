@@ -58,10 +58,16 @@ export interface ScrapedLead {
   // From website enrichment
   emails: string[]
   contactName?: string
+  contactTitle?: string
   services: string[]
   specialties: string[]
   providerCount?: number
   description?: string
+  // AI-extracted fields
+  ehrSystem?: string
+  practiceSize?: string
+  acceptsInsurance?: string[]
+  decisionMakers?: Array<{ name: string; title: string; email: string | null }>
 }
 
 // ─── Google Maps Scraper ─────────────────────────────────────────
@@ -107,17 +113,24 @@ export async function searchGoogleMaps(
   return items as GoogleMapsPlace[]
 }
 
-// ─── Website Enrichment (Direct HTTP — no Apify Actor needed) ────
+// ─── Website Enrichment (Apify Crawler + Direct HTTP Fallback) ────
 
 /**
- * Scrape a practice's website directly via HTTP to extract emails, phones,
- * services, and specialties. Fetches main page + common contact pages.
- * Much faster and cheaper than spinning up an Apify Actor per site.
+ * Scrape a practice's website and return raw content.
+ * Tries Apify Content Crawler first (handles JS, proxies), falls back to direct fetch.
  */
-export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnrichment> {
+export async function crawlWebsite(websiteUrl: string): Promise<{ text: string; html: string }> {
   const baseUrl = websiteUrl.replace(/\/+$/, "")
 
-  // Fetch multiple pages in parallel — contact/about pages have emails most often
+  // Try Apify Website Content Crawler first (handles JS-heavy sites)
+  try {
+    const apifyResult = await crawlWithApify(baseUrl)
+    if (apifyResult.text.length > 500) return apifyResult
+  } catch (err) {
+    console.warn("Apify crawler failed, falling back to direct fetch:", err)
+  }
+
+  // Fallback: direct fetch in parallel
   const pagesToFetch = [
     baseUrl,
     `${baseUrl}/contact`,
@@ -129,9 +142,7 @@ export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnri
     `${baseUrl}/services`,
   ]
 
-  const results = await Promise.allSettled(
-    pagesToFetch.map((url) => fetchPage(url))
-  )
+  const results = await Promise.allSettled(pagesToFetch.map(fetchPage))
 
   let allHtml = ""
   let allText = ""
@@ -143,7 +154,49 @@ export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnri
     }
   }
 
-  return parseWebsiteContent(allText, allHtml)
+  return { text: allText, html: allHtml }
+}
+
+async function crawlWithApify(url: string): Promise<{ text: string; html: string }> {
+  const token = getToken()
+
+  const runRes = await fetch(
+    `${APIFY_BASE_URL}/acts/apify~website-content-crawler/runs?token=${token}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        startUrls: [
+          { url },
+          { url: `${url}/contact` },
+          { url: `${url}/about` },
+          { url: `${url}/our-team` },
+        ],
+        maxCrawlPages: 8,
+        maxCrawlDepth: 1,
+        saveHtml: true,
+      }),
+    }
+  )
+
+  if (!runRes.ok) {
+    throw new Error(`Apify crawler start failed: ${runRes.status}`)
+  }
+
+  const run = await runRes.json()
+  const runId = run.data?.id
+  if (!runId) throw new Error("No run ID")
+
+  const items = await waitForRunItems(runId, token, 90_000)
+
+  const text = items
+    .map((i: Record<string, unknown>) => String(i.text ?? i.markdown ?? i.content ?? ""))
+    .join("\n\n")
+  const html = items
+    .map((i: Record<string, unknown>) => String(i.html ?? ""))
+    .join("\n")
+
+  return { text, html }
 }
 
 async function fetchPage(url: string): Promise<{ html: string; text: string } | null> {
@@ -165,7 +218,6 @@ async function fetchPage(url: string): Promise<{ html: string; text: string } | 
     if (!res.ok) return null
 
     const html = await res.text()
-    // Strip HTML tags for text extraction
     const text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
       .replace(/<[^>]+>/g, " ")
@@ -175,6 +227,14 @@ async function fetchPage(url: string): Promise<{ html: string; text: string } | 
   } catch {
     return null
   }
+}
+
+/**
+ * Legacy: regex-based parsing. Still used as an absolute fallback if AI fails.
+ */
+export async function enrichFromWebsite(websiteUrl: string): Promise<WebsiteEnrichment> {
+  const { text, html } = await crawlWebsite(websiteUrl)
+  return parseWebsiteContent(text, html)
 }
 
 // ─── Full Pipeline: Maps + Website ──────────────────────────────
@@ -212,36 +272,74 @@ export async function scrapeLeads(
     }
 
     if (place.website && !options.skipWebsiteEnrichment) {
-      // Step 2a: Hunter.io — find emails by domain (most reliable)
+      // Step 2a: Crawl website (Apify with fallback to direct fetch)
+      let websiteContent = { text: "", html: "" }
       try {
-        const { findEmailsByDomain, extractDomain } = await import("@/lib/hunter")
-        const domain = extractDomain(place.website)
-        const hunterResult = await findEmailsByDomain(domain, { limit: 3 })
-        if (hunterResult.emails.length > 0) {
-          lead.emails = hunterResult.emails.map((e) => e.value.toLowerCase())
-          // Use the first person's name as contact
-          const firstPerson = hunterResult.emails.find((e) => e.firstName)
-          if (firstPerson) {
-            lead.contactName = [firstPerson.firstName, firstPerson.lastName]
-              .filter(Boolean).join(" ")
-          }
-        }
+        websiteContent = await crawlWebsite(place.website)
       } catch (err) {
-        console.warn(`Hunter.io failed for ${place.title}:`, err)
+        console.warn(`Website crawl failed for ${place.title}:`, err)
       }
 
-      // Step 2b: Direct website fetch — extract services, specialties, and fallback emails
-      try {
-        const enrichment = await enrichFromWebsite(place.website)
-        if (lead.emails.length === 0 && enrichment.emails.length > 0) {
-          lead.emails = enrichment.emails
+      // Step 2b: AI extraction (OpenAI) — primary enrichment path
+      if (websiteContent.text.length > 200) {
+        try {
+          const { enrichWithAI } = await import("@/lib/ai-enrichment")
+          const ai = await enrichWithAI({
+            practiceName: place.title,
+            websiteContent: websiteContent.text,
+          })
+
+          lead.emails = ai.emails.map((e) => e.value.toLowerCase())
+          lead.services = ai.services
+          lead.specialties = ai.specialties
+          lead.providerCount = ai.providerCount ?? undefined
+          lead.description = ai.description
+          lead.ehrSystem = ai.ehrSystem !== "Unknown" ? ai.ehrSystem : undefined
+          lead.practiceSize = ai.practiceSize
+          lead.acceptsInsurance = ai.acceptsInsurance
+          lead.decisionMakers = ai.decisionMakers
+
+          // Pick the best contact: personal email first, then decision maker
+          const personalEmail = ai.emails.find((e) => e.type === "personal" && e.contactName)
+          if (personalEmail) {
+            lead.contactName = personalEmail.contactName ?? undefined
+            lead.contactTitle = personalEmail.title ?? undefined
+          } else if (ai.decisionMakers.length > 0) {
+            const dm = ai.decisionMakers[0]
+            lead.contactName = dm.name
+            lead.contactTitle = dm.title
+            if (dm.email && !lead.emails.includes(dm.email.toLowerCase())) {
+              lead.emails.unshift(dm.email.toLowerCase())
+            }
+          }
+        } catch (err) {
+          console.warn(`AI enrichment failed for ${place.title}:`, err)
+          // Fallback to regex parser
+          const fallback = parseWebsiteContent(websiteContent.text, websiteContent.html)
+          lead.emails = fallback.emails
+          lead.services = fallback.services
+          lead.specialties = fallback.specialties
         }
-        lead.services = enrichment.services
-        lead.specialties = enrichment.specialties
-        lead.providerCount = enrichment.providerCount
-        lead.description = enrichment.description
-      } catch (err) {
-        console.warn(`Website enrichment failed for ${place.title}:`, err)
+      }
+
+      // Step 2c: Hunter.io as final fallback if still no emails
+      if (lead.emails.length === 0) {
+        try {
+          const { findEmailsByDomain, extractDomain } = await import("@/lib/hunter")
+          const domain = extractDomain(place.website)
+          const hunterResult = await findEmailsByDomain(domain, { limit: 3 })
+          if (hunterResult.emails.length > 0) {
+            lead.emails = hunterResult.emails.map((e) => e.value.toLowerCase())
+            const firstPerson = hunterResult.emails.find((e) => e.firstName)
+            if (firstPerson && !lead.contactName) {
+              lead.contactName = [firstPerson.firstName, firstPerson.lastName]
+                .filter(Boolean).join(" ")
+              lead.contactTitle = firstPerson.position ?? undefined
+            }
+          }
+        } catch (err) {
+          console.warn(`Hunter.io fallback failed for ${place.title}:`, err)
+        }
       }
     }
 

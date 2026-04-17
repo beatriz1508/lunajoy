@@ -134,18 +134,49 @@ async function processLead(
   if (lead.category) {
     customFields.push({ id: "practice_type", value: lead.category })
   }
+  if (lead.ehrSystem) {
+    customFields.push({ id: "ehr_system", value: lead.ehrSystem })
+  }
+  if (lead.practiceSize) {
+    customFields.push({ id: "practice_size", value: lead.practiceSize })
+  }
+  if (lead.acceptsInsurance?.length) {
+    customFields.push({ id: "accepts_insurance", value: lead.acceptsInsurance.join(", ") })
+  }
+  if (lead.contactTitle) {
+    customFields.push({ id: "contact_title", value: lead.contactTitle })
+  }
+  if (lead.description) {
+    customFields.push({ id: "ai_description", value: lead.description })
+  }
+  if (lead.decisionMakers?.length) {
+    const dmSummary = lead.decisionMakers
+      .map((d) => `${d.name} (${d.title})${d.email ? ` - ${d.email}` : ""}`)
+      .join("; ")
+    customFields.push({ id: "decision_makers", value: dmSummary })
+  }
+
+  // Auto-tag with EHR system if found (makes Athena leads easy to filter)
+  const ehrTag = lead.ehrSystem ? `ehr-${lead.ehrSystem.toLowerCase()}` : null
 
   const tags = [
     "apify-lead",
     "medical-practice",
     "auto-scraped",
+    ...(ehrTag ? [ehrTag] : []),
     ...(options.tags ?? []),
   ]
 
-  // Create contact in GHL (use practice name as company)
+  // Use decision maker's name if available, otherwise practice name
+  const [firstName, ...restName] = lead.contactName
+    ? lead.contactName.split(" ")
+    : [lead.practiceName]
+  const lastName = restName.join(" ")
+
+  // Create contact in GHL
   const contact = await createContact({
-    firstName: lead.practiceName,
-    lastName: "",
+    firstName,
+    lastName,
     ...(email ? { email } : {}),
     phone: lead.phone,
     companyName: lead.practiceName,
