@@ -110,7 +110,7 @@ export async function searchGoogleMaps(
 
   const items = await waitForRunItems(runId, token, 180_000)
 
-  return items as GoogleMapsPlace[]
+  return items as unknown as GoogleMapsPlace[]
 }
 
 // ─── Website Enrichment (Apify Crawler + Direct HTTP Fallback) ────
