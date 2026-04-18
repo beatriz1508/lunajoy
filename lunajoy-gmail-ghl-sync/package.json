@@ -1,0 +1,13 @@
+{
+  "name": "lunajoy-gmail-ghl-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gmail BCC → GoHighLevel auto-contact automation for LunaJoy sales. The lib/ modules are consumed by an n8n workflow (workflow.json).",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/parseEmail.test.js"
+  },
+  "license": "UNLICENSED"
+}

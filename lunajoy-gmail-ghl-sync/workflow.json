@@ -1,0 +1,395 @@
+{
+  "name": "LunaJoy — Gmail BCC → GHL Auto-Contact",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "readStatus": "unread"
+        },
+        "options": {
+          "downloadAttachments": false
+        }
+      },
+      "id": "1a000000-0000-4000-8000-000000000001",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_GMAIL_CRED_ID",
+          "name": "Gmail — automation@hellolunajoy.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify and extract fields from an incoming Gmail message.\n// This is the inlined version of lib/parseEmail.js — the canonical source\n// with unit tests lives in the repo. Keep the two in sync.\n\nconst AUTOMATION_EMAIL = ($env.AUTOMATION_EMAIL || 'automation@hellolunajoy.com').toLowerCase();\nconst INTERNAL_DOMAINS = ($env.INTERNAL_DOMAINS || 'hellolunajoy.com,lunajoy.com')\n  .split(',').map(s => s.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);\nconst SKIP_SENDER_PATTERNS = ($env.SKIP_SENDER_PATTERNS ||\n  '^noreply@,^no-reply@,^mailer-daemon@,^postmaster@,^bounces?@,^calendar-notification@google\\\\.com$')\n  .split(',').map(s => { try { return new RegExp(s, 'i'); } catch { return null; } }).filter(Boolean);\n\nconst EMAIL_RX = /([A-Z0-9._%+\\-]+@[A-Z0-9.\\-]+\\.[A-Z]{2,})/i;\n\nfunction parseAddress(raw) {\n  if (!raw || typeof raw !== 'string') return null;\n  const s = raw.trim(); if (!s) return null;\n  const angle = s.match(/^(.*)<\\s*([^>]+?)\\s*>\\s*$/);\n  if (angle) {\n    const name = angle[1].trim().replace(/^\"|\"$/g, '').trim() || null;\n    const address = angle[2].trim().toLowerCase();\n    if (!EMAIL_RX.test(address)) return null;\n    return { name, address };\n  }\n  const m = s.match(EMAIL_RX);\n  return m ? { name: null, address: m[1].toLowerCase() } : null;\n}\n\nfunction parseAddressList(val) {\n  if (val == null) return [];\n  if (Array.isArray(val)) return val.flatMap(parseAddressList);\n  if (typeof val === 'object') {\n    if (val.address) return [{ name: val.name || null, address: String(val.address).toLowerCase() }];\n    if (val.value) return parseAddressList(val.value);\n    return [];\n  }\n  if (typeof val !== 'string') return [];\n  const out = []; let depth = 0, quoted = false, buf = '';\n  for (let i = 0; i < val.length; i++) {\n    const c = val[i];\n    if (c === '\"' && val[i-1] !== '\\\\') quoted = !quoted;\n    else if (!quoted && c === '<') depth++;\n    else if (!quoted && c === '>') depth--;\n    if (c === ',' && !quoted && depth === 0) { if (buf.trim()) out.push(buf.trim()); buf = ''; }\n    else buf += c;\n  }\n  if (buf.trim()) out.push(buf.trim());\n  return out.map(parseAddress).filter(Boolean);\n}\n\nfunction isInternal(email) {\n  if (!email) return false;\n  const at = email.lastIndexOf('@'); if (at < 0) return false;\n  return INTERNAL_DOMAINS.includes(email.slice(at+1).toLowerCase());\n}\n\nfunction isSkipSender(email) {\n  return email && SKIP_SENDER_PATTERNS.some(rx => rx.test(email));\n}\n\nfunction isAutoresponderByHeaders(headers) {\n  if (!headers) return false;\n  const low = {}; for (const [k,v] of Object.entries(headers)) low[k.toLowerCase()] = Array.isArray(v) ? v.join(',') : v;\n  for (const h of ['auto-submitted','x-autoreply','x-autorespond','x-auto-response-suppress']) {\n    if (low[h] && String(low[h]).trim().toLowerCase() !== 'no') return true;\n  }\n  const p = (low['precedence'] || '').toLowerCase();\n  return p.includes('bulk') || p.includes('auto_reply') || p.includes('auto-reply') || p.includes('junk');\n}\n\nconst FWD_MARKERS = [\n  /^-{3,}\\s*Forwarded message\\s*-{3,}/im,\n  /^Begin forwarded message:/im,\n  /^-{3,}\\s*Original Message\\s*-{3,}/im,\n  /^From:\\s.+\\nSent:\\s.+\\nTo:\\s.+/im,\n];\nfunction hasForwardMarker(body) { return body && FWD_MARKERS.some(rx => rx.test(body)); }\n\nfunction parseForwardBlock(body) {\n  if (!body) return null;\n  let idx = -1;\n  for (const rx of FWD_MARKERS) { const m = body.match(rx); if (m && m.index != null) { idx = m.index + m[0].length; break; } }\n  if (idx < 0) return null;\n  const tail = body.slice(idx).split(/\\r?\\n/).slice(0, 40).join('\\n');\n  const pick = (label) => { const m = tail.match(new RegExp(`^\\\\s*${label}\\\\s*:\\\\s*(.+)$`, 'im')); return m ? m[1].trim() : null; };\n  const from = pick('From'), to = pick('To'), subject = pick('Subject'), date = pick('Date') || pick('Sent');\n  if (!from && !to) return null;\n  return { from, to, subject, date };\n}\n\nfunction htmlToText(html) {\n  return String(html || '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '').replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n').replace(/<\\/p>/gi, '\\n\\n').replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction firstExternal(list) {\n  return list.find(a => a && a.address && a.address !== AUTOMATION_EMAIL && !isInternal(a.address)) || null;\n}\n\nfunction toIso(d) { if (!d) return null; try { const t = new Date(d); return isNaN(t.getTime()) ? null : t.toISOString(); } catch { return null; } }\n\nfunction splitName(name) {\n  if (!name) return { firstName: null, lastName: null };\n  let n = String(name).trim().replace(/^\"|\"$/g, '').trim().replace(/^(dr|mr|mrs|ms|prof|rev|sr|jr)\\.?\\s+/i, '');\n  if (!n) return { firstName: null, lastName: null };\n  const parts = n.split(/\\s+/);\n  return parts.length === 1 ? { firstName: parts[0], lastName: null } : { firstName: parts[0], lastName: parts.slice(1).join(' ') };\n}\n\nconst results = [];\nfor (const item of items) {\n  const email = item.json;\n  const headers = email.headers || email.payload?.headers || {};\n  const hmap = {};\n  if (Array.isArray(headers)) { for (const h of headers) hmap[String(h.name || '').toLowerCase()] = h.value; }\n  else { for (const [k,v] of Object.entries(headers)) hmap[k.toLowerCase()] = v; }\n\n  const from = parseAddressList(email.from || hmap['from'])[0] || null;\n  const toList = parseAddressList(email.to || hmap['to']);\n  const ccList = parseAddressList(email.cc || hmap['cc']);\n  const body = (email.text && email.text.trim()) ? email.text : htmlToText(email.html);\n  const subject = email.subject || hmap['subject'] || '';\n  const messageId = email.messageId || hmap['message-id'] || null;\n  const threadId = email.threadId || null;\n  const originalTimestamp = toIso(email.date) || toIso(hmap['date']);\n\n  const base = { type: 'skip', externalEmail: null, externalName: null, repEmail: from?.address || null,\n    direction: null, subject, body, originalTimestamp, gmailMessageId: messageId, threadId, multiRecipient: false,\n    firstName: null, lastName: null };\n\n  if (from && (isSkipSender(from.address) || isAutoresponderByHeaders(hmap))) {\n    results.push({ json: { ...base, skipReason: 'autoresponder' } }); continue;\n  }\n\n  const recipients = [...toList, ...ccList].filter(a => a.address !== AUTOMATION_EMAIL);\n  const fromInternal = from && isInternal(from.address);\n\n  if (fromInternal && recipients.length === 0 && hasForwardMarker(body)) {\n    const inner = parseForwardBlock(body);\n    if (!inner) { results.push({ json: { ...base, skipReason: 'unparseable' } }); continue; }\n    const innerFrom = parseAddress(inner.from || '');\n    const innerToList = parseAddressList(inner.to || '');\n    const innerTs = toIso(inner.date) || originalTimestamp;\n\n    if (innerFrom && !isInternal(innerFrom.address)) {\n      const name = splitName(innerFrom.name);\n      results.push({ json: { ...base, type: 'forward-inbound', direction: 'inbound',\n        externalEmail: innerFrom.address, externalName: innerFrom.name, repEmail: from.address,\n        subject: inner.subject || subject, originalTimestamp: innerTs,\n        firstName: name.firstName, lastName: name.lastName } });\n      continue;\n    }\n    const ext = firstExternal(innerToList);\n    if (!ext) { results.push({ json: { ...base, skipReason: 'no-external-recipient' } }); continue; }\n    const moreExt = innerToList.filter(a => a.address !== AUTOMATION_EMAIL && !isInternal(a.address)).length > 1;\n    const name = splitName(ext.name);\n    results.push({ json: { ...base, type: 'forward-outbound', direction: 'outbound',\n      externalEmail: ext.address, externalName: ext.name,\n      repEmail: (innerFrom && innerFrom.address) || from.address,\n      subject: inner.subject || subject, originalTimestamp: innerTs, multiRecipient: moreExt,\n      firstName: name.firstName, lastName: name.lastName } });\n    continue;\n  }\n\n  if (fromInternal) {\n    const ext = firstExternal(recipients);\n    if (!ext) {\n      if (recipients.length === 0) { results.push({ json: { ...base, skipReason: 'unparseable' } }); continue; }\n      if (recipients.every(a => isInternal(a.address))) { results.push({ json: { ...base, skipReason: 'internal-only' } }); continue; }\n      results.push({ json: { ...base, skipReason: 'no-external-recipient' } }); continue;\n    }\n    const externals = recipients.filter(a => !isInternal(a.address));\n    const name = splitName(ext.name);\n    results.push({ json: { ...base, type: 'bcc-outbound', direction: 'outbound',\n      externalEmail: ext.address, externalName: ext.name, repEmail: from.address,\n      multiRecipient: externals.length > 1, firstName: name.firstName, lastName: name.lastName } });\n    continue;\n  }\n\n  results.push({ json: { ...base, skipReason: from ? 'no-external-recipient' : 'unparseable' } });\n}\nreturn results;"
+      },
+      "id": "2a000000-0000-4000-8000-000000000002",
+      "name": "Parse Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-skip-1",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "skip",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3a000000-0000-4000-8000-000000000003",
+      "name": "IF — Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://services.leadconnectorhq.com/contacts/?query={{ encodeURIComponent($json.externalEmail) }}&locationId={{ $env.GHL_LOCATION_ID }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GHL_PRIVATE_INTEGRATION_TOKEN }}" },
+            { "name": "Version", "value": "2021-07-28" },
+            { "name": "Accept", "value": "application/json" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "neverError": false, "responseFormat": "json" } },
+          "retry": { "enabled": true, "maxRetries": 3, "waitBetweenTries": 1000 }
+        }
+      },
+      "id": "4a000000-0000-4000-8000-000000000004",
+      "name": "GHL Lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 240],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Exact-match filter: the ?query= param matches name/email/phone, so we must\n// confirm the returned contact actually has this email (case-insensitive).\nconst results = [];\nfor (const item of items) {\n  const parse = item.json.__parse || item.json;        // fallback if not wrapped\n  const search = item.json.search || item.json;\n  const target = (parse.externalEmail || '').toLowerCase();\n  const list = Array.isArray(search.contacts) ? search.contacts : [];\n  const exact = list.find(c => {\n    if (!c) return false;\n    if (c.email && String(c.email).toLowerCase() === target) return true;\n    if (Array.isArray(c.emails) && c.emails.some(e => { const v = typeof e === 'string' ? e : (e?.email || e?.value); return v && String(v).toLowerCase() === target; })) return true;\n    return false;\n  });\n  results.push({ json: { ...parse, existingContactId: exact?.id || null, contactFound: !!exact } });\n}\nreturn results;"
+      },
+      "id": "5a000000-0000-4000-8000-000000000005",
+      "name": "Resolve Lookup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-found-1",
+              "leftValue": "={{ $json.contactFound }}",
+              "rightValue": "={{ true }}",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6a000000-0000-4000-8000-000000000006",
+      "name": "IF — Contact Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1420, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/contacts/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GHL_PRIVATE_INTEGRATION_TOKEN }}" },
+            { "name": "Version", "value": "2021-07-28" },
+            { "name": "Accept", "value": "application/json" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"email\": \"{{ $json.externalEmail }}\",\n  \"firstName\": \"{{ $json.firstName || '' }}\",\n  \"lastName\": \"{{ $json.lastName || '' }}\",\n  \"locationId\": \"{{ $env.GHL_LOCATION_ID }}\",\n  \"source\": \"Gmail BCC Automation\",\n  \"tags\": [\"{{ $json.type === 'bcc-outbound' ? 'auto-created-bcc' : 'auto-created-forward' }}\"],\n  \"assignedTo\": \"{{ (JSON.parse($env.REP_USER_MAP || '{}'))[$json.repEmail] || '' }}\"\n}",
+        "options": {
+          "response": { "response": { "neverError": false, "responseFormat": "json" } },
+          "retry": { "enabled": true, "maxRetries": 3, "waitBetweenTries": 1000 }
+        }
+      },
+      "id": "7a000000-0000-4000-8000-000000000007",
+      "name": "GHL Create Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 360],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge the created contact id onto the parsed payload and compute a\n// deterministic idempotency key. Base64url of the tuple is sufficient —\n// GHL just needs uniqueness + consistency per logical event, not crypto.\nconst results = [];\nfor (const item of items) {\n  const parse = item.json.__parse || item.json;\n  const created = item.json.created || item.json;\n  const contactId = created?.contact?.id || created?.id;\n  if (!contactId) {\n    throw new Error(`createContact: response missing id. Body: ${JSON.stringify(created).slice(0, 400)}`);\n  }\n  const idempotencyKey = Buffer\n    .from(`${parse.gmailMessageId || ''}|${contactId}|${parse.direction}`)\n    .toString('base64url');\n  results.push({ json: { ...parse, contactId, contactJustCreated: true, idempotencyKey } });\n}\nreturn results;"
+      },
+      "id": "8a000000-0000-4000-8000-000000000008",
+      "name": "Merge Created Contact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1900, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/conversations/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GHL_PRIVATE_INTEGRATION_TOKEN }}" },
+            { "name": "Version", "value": "2021-04-15" },
+            { "name": "Accept", "value": "application/json" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Idempotency-Key", "value": "={{ $json.idempotencyKey }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contactId\": \"{{ $json.contactId }}\",\n  \"channel\": \"email\",\n  \"direction\": \"{{ $json.direction }}\",\n  \"endpoint\": { \"email\": \"{{ $json.externalEmail }}\" },\n  \"content\": {\n    \"text\": {{ JSON.stringify($json.body || '') }},\n    \"subject\": {{ JSON.stringify($json.subject || '') }}\n  },\n  \"metadata\": {\n    \"timestamp\": \"{{ $json.originalTimestamp || new Date().toISOString() }}\",\n    \"providerMessageId\": \"{{ $json.gmailMessageId || '' }}\",\n    \"externalThreadKey\": \"{{ $json.threadId || '' }}\"\n  },\n  \"idempotencyKey\": \"{{ $json.idempotencyKey }}\"\n}",
+        "options": {
+          "response": { "response": { "neverError": false, "responseFormat": "json" } },
+          "retry": { "enabled": true, "maxRetries": 3, "waitBetweenTries": 1000 }
+        }
+      },
+      "id": "9a000000-0000-4000-8000-000000000009",
+      "name": "GHL Create Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2140, 360],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "l-1", "name": "timestamp", "value": "={{ new Date().toISOString() }}", "type": "string" },
+            { "id": "l-2", "name": "rep",       "value": "={{ $json.repEmail || '' }}",       "type": "string" },
+            { "id": "l-3", "name": "externalEmail", "value": "={{ $json.externalEmail || '' }}", "type": "string" },
+            { "id": "l-4", "name": "type",      "value": "={{ $json.type || 'skip' }}",       "type": "string" },
+            { "id": "l-5", "name": "skipReason","value": "={{ $json.skipReason || '' }}",     "type": "string" },
+            { "id": "l-6", "name": "contactId", "value": "={{ $json.contactId || $json.existingContactId || '' }}", "type": "string" },
+            { "id": "l-7", "name": "status",    "value": "={{ $json.__status || 'success' }}","type": "string" },
+            { "id": "l-8", "name": "errorMessage","value": "={{ $json.__error || '' }}",       "type": "string" },
+            { "id": "l-9", "name": "subject",   "value": "={{ $json.subject || '' }}",        "type": "string" },
+            { "id": "l-10","name": "gmailMessageId","value": "={{ $json.gmailMessageId || '' }}", "type": "string" },
+            { "id": "l-11","name": "multiRecipient","value": "={{ $json.multiRecipient === true }}", "type": "boolean" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aa000000-0000-4000-8000-00000000000a",
+      "name": "Build Log Row",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2380, 360]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.LOG_SHEET_ID }}",
+        "sheetName": "sync_log",
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "ba000000-0000-4000-8000-00000000000b",
+      "name": "Append to Sync Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2620, 360],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_SHEETS_CRED_ID",
+          "name": "Google Sheets — sync_log"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "sk-1", "name": "timestamp", "value": "={{ new Date().toISOString() }}", "type": "string" },
+            { "id": "sk-2", "name": "rep",       "value": "={{ $json.repEmail || '' }}",       "type": "string" },
+            { "id": "sk-3", "name": "externalEmail", "value": "={{ $json.externalEmail || '' }}", "type": "string" },
+            { "id": "sk-4", "name": "type",      "value": "=skip",                             "type": "string" },
+            { "id": "sk-5", "name": "skipReason","value": "={{ $json.skipReason || 'contact-exists' }}", "type": "string" },
+            { "id": "sk-6", "name": "contactId", "value": "={{ $json.existingContactId || '' }}", "type": "string" },
+            { "id": "sk-7", "name": "status",    "value": "=skipped",                           "type": "string" },
+            { "id": "sk-8", "name": "subject",   "value": "={{ $json.subject || '' }}",        "type": "string" },
+            { "id": "sk-9", "name": "gmailMessageId","value": "={{ $json.gmailMessageId || '' }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ca000000-0000-4000-8000-00000000000c",
+      "name": "Build Skip Row",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1660, 120]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.LOG_SHEET_ID }}",
+        "sheetName": "sync_log",
+        "columns": { "mappingMode": "autoMapInputData" },
+        "options": {}
+      },
+      "id": "da000000-0000-4000-8000-00000000000d",
+      "name": "Append Skip Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1900, 120],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_SHEETS_CRED_ID",
+          "name": "Google Sheets — sync_log"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "e-1", "name": "timestamp", "value": "={{ new Date().toISOString() }}", "type": "string" },
+            { "id": "e-2", "name": "rep",       "value": "={{ $json.repEmail || '' }}",       "type": "string" },
+            { "id": "e-3", "name": "externalEmail", "value": "={{ $json.externalEmail || '' }}", "type": "string" },
+            { "id": "e-4", "name": "type",      "value": "=error",                             "type": "string" },
+            { "id": "e-5", "name": "status",    "value": "=failed",                            "type": "string" },
+            { "id": "e-6", "name": "errorMessage", "value": "={{ $json.error?.message || JSON.stringify($json).slice(0, 400) }}", "type": "string" },
+            { "id": "e-7", "name": "gmailMessageId","value": "={{ $json.gmailMessageId || '' }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ea000000-0000-4000-8000-00000000000e",
+      "name": "Build Error Row",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1900, 540]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.LOG_SHEET_ID }}",
+        "sheetName": "sync_log",
+        "columns": { "mappingMode": "autoMapInputData" },
+        "options": {}
+      },
+      "id": "fa000000-0000-4000-8000-00000000000f",
+      "name": "Append Error Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2140, 540],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_SHEETS_CRED_ID",
+          "name": "Google Sheets — sync_log"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{ "node": "Parse Email", "type": "main", "index": 0 }]]
+    },
+    "Parse Email": {
+      "main": [[{ "node": "IF — Skip?", "type": "main", "index": 0 }]]
+    },
+    "IF — Skip?": {
+      "main": [
+        [{ "node": "Build Skip Row", "type": "main", "index": 0 }],
+        [{ "node": "GHL Lookup", "type": "main", "index": 0 }]
+      ]
+    },
+    "GHL Lookup": {
+      "main": [
+        [{ "node": "Resolve Lookup", "type": "main", "index": 0 }],
+        [{ "node": "Build Error Row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Resolve Lookup": {
+      "main": [[{ "node": "IF — Contact Exists?", "type": "main", "index": 0 }]]
+    },
+    "IF — Contact Exists?": {
+      "main": [
+        [{ "node": "Build Skip Row", "type": "main", "index": 0 }],
+        [{ "node": "GHL Create Contact", "type": "main", "index": 0 }]
+      ]
+    },
+    "GHL Create Contact": {
+      "main": [
+        [{ "node": "Merge Created Contact", "type": "main", "index": 0 }],
+        [{ "node": "Build Error Row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge Created Contact": {
+      "main": [[{ "node": "GHL Create Message", "type": "main", "index": 0 }]]
+    },
+    "GHL Create Message": {
+      "main": [
+        [{ "node": "Build Log Row", "type": "main", "index": 0 }],
+        [{ "node": "Build Error Row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Log Row": {
+      "main": [[{ "node": "Append to Sync Log", "type": "main", "index": 0 }]]
+    },
+    "Build Skip Row": {
+      "main": [[{ "node": "Append Skip Log", "type": "main", "index": 0 }]]
+    },
+    "Build Error Row": {
+      "main": [[{ "node": "Append Error Log", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "timezone": "America/New_York"
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    { "name": "lunajoy" },
+    { "name": "ghl-sync" }
+  ],
+  "versionId": "1.0.0"
+}
