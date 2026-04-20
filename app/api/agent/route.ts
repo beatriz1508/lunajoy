@@ -1,5 +1,6 @@
 import { openai } from "@ai-sdk/openai"
-import { streamText, stepCountIs } from "ai"
+import { streamText, stepCountIs, convertToModelMessages } from "ai"
+import type { UIMessage } from "ai"
 import { createAgentTools } from "@/lib/agent/tools"
 
 const AGENT_SYSTEM_PROMPT = `You are Luna, an expert B2B sales AI agent for the LunaJoy sales team.
@@ -50,14 +51,18 @@ export async function POST(req: Request) {
       )
     }
 
-    const { messages } = await req.json()
+    const { messages } = await req.json() as { messages: UIMessage[] }
+
+    // Convert UI messages (parts-based) to model messages (content-based)
+    // DefaultChatTransport sends UIMessage[], but streamText expects ModelMessage[]
+    const modelMessages = await convertToModelMessages(messages)
 
     const tools = createAgentTools()
 
     const result = streamText({
       model: openai("gpt-4o-mini"),
       system: AGENT_SYSTEM_PROMPT,
-      messages,
+      messages: modelMessages,
       tools,
       stopWhen: stepCountIs(5), // Allow up to 5 tool calls in a single turn
     })
